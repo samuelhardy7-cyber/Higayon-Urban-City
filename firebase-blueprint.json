@@ -1,0 +1,280 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated student or teacher account profile and avatar customization.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "role": { "type": "string", "enum": ["student", "teacher"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "role", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Verified teacher/admin role grant keyed by UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "grantedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "grantedBy", "createdAt"]
+    },
+    "TeacherQuestion": {
+      "title": "TeacherQuestion",
+      "description": "Full educational question record including answer key and explanation (teacher-only access).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "topic": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "type": "string", "enum": ["multiple_choice", "true_false"] },
+        "questionText": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "optionA": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "optionB": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "optionC": { "type": "string", "maxLength": 300 },
+        "optionD": { "type": "string", "maxLength": 300 },
+        "correctAnswer": { "type": "string", "enum": ["A", "B", "C", "D"] },
+        "explanation": { "type": "string", "maxLength": 1000 },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard", "special"] },
+        "points": { "type": "number" },
+        "buildingCategory": { "type": "string", "enum": ["any", "residential", "commercial", "business", "industrial"] },
+        "floorPlacement": { "type": "number", "description": "Optional floor placement 1..22 (22 = CITY TOWER Rooftop)" },
+        "questionSetId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "authorUid",
+        "subjectId",
+        "subjectName",
+        "topic",
+        "type",
+        "questionText",
+        "optionA",
+        "optionB",
+        "correctAnswer",
+        "difficulty",
+        "points",
+        "buildingCategory",
+        "questionSetId",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PublicQuestion": {
+      "title": "PublicQuestion",
+      "description": "Sanitized student-facing question prompt strictly omitting correctAnswer and explanation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "topic": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "type": "string", "enum": ["multiple_choice", "true_false"] },
+        "questionText": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "optionA": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "optionB": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "optionC": { "type": "string", "maxLength": 300 },
+        "optionD": { "type": "string", "maxLength": 300 },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard", "special"] },
+        "points": { "type": "number" },
+        "buildingCategory": { "type": "string", "enum": ["any", "residential", "commercial", "business", "industrial"] },
+        "floorPlacement": { "type": "number", "description": "Optional floor placement 1..22 (22 = CITY TOWER Rooftop)" },
+        "questionSetId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "subjectId",
+        "subjectName",
+        "topic",
+        "type",
+        "questionText",
+        "optionA",
+        "optionB",
+        "difficulty",
+        "points",
+        "buildingCategory",
+        "questionSetId",
+        "status",
+        "updatedAt"
+      ]
+    },
+    "Subject": {
+      "title": "Subject",
+      "description": "Educational subject category with curated topic tags.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "color": { "type": "string", "minLength": 4, "maxLength": 16 },
+        "topics": { "type": "array" },
+        "visibility": { "type": "string", "enum": ["public"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "color", "topics", "visibility", "updatedAt"]
+    },
+    "QuestionSet": {
+      "title": "QuestionSet",
+      "description": "Grouped set of educational questions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 400 },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "description", "isActive", "createdAt", "updatedAt"]
+    },
+    "TeacherConfig": {
+      "title": "TeacherConfig",
+      "description": "Global reward & gameplay configuration controlled by teachers.",
+      "type": "object",
+      "properties": {
+        "allowRetryOnWrong": { "type": "boolean" },
+        "awardCityCashBonus": { "type": "boolean" },
+        "cashPerPoint": { "type": "number" },
+        "showExplanationOnWrong": { "type": "boolean" },
+        "visibility": { "type": "string", "enum": ["public"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["allowRetryOnWrong", "awardCityCashBonus", "cashPerPoint", "showExplanationOnWrong", "visibility", "updatedAt"]
+    },
+    "MultiplayerSession": {
+      "title": "MultiplayerSession",
+      "description": "Classroom educational multiplayer exploration session.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "subject": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "questionSetId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "joinCode": { "type": "string", "minLength": 4, "maxLength": 16, "pattern": "^[A-Z0-9]+$" },
+        "maxPlayers": { "type": "number" },
+        "durationMinutes": { "type": "number" },
+        "objectives": { "type": "string", "maxLength": 400 },
+        "status": { "type": "string", "enum": ["waiting", "active", "paused", "ended"] },
+        "teacherUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "name",
+        "subject",
+        "questionSetId",
+        "joinCode",
+        "maxPlayers",
+        "durationMinutes",
+        "objectives",
+        "status",
+        "teacherUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SessionParticipant": {
+      "title": "SessionParticipant",
+      "description": "Student participant record inside a multiplayer session.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sessionId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "connectionStatus": { "type": "string", "enum": ["online", "reconnecting", "offline"] },
+        "questionsCompleted": { "type": "number" },
+        "pointsEarned": { "type": "number" },
+        "currentBuilding": { "type": "string", "maxLength": 64 },
+        "currentFloor": { "type": "number", "description": "Current building floor 0..22" },
+        "currentActivity": { "type": "string", "maxLength": 80 },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "sessionId",
+        "displayName",
+        "connectionStatus",
+        "questionsCompleted",
+        "pointsEarned",
+        "currentBuilding",
+        "currentFloor",
+        "currentActivity",
+        "joinedAt",
+        "updatedAt"
+      ]
+    },
+    "StudentProgress": {
+      "title": "StudentProgress",
+      "description": "Student quiz completion state and point tally.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "completedQuestionIds": { "type": "array" },
+        "lockedQuestionIds": { "type": "array" },
+        "earnedPoints": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "completedQuestionIds", "lockedQuestionIds", "earnedPoints", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authenticated student and teacher profiles."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Authorized teacher UID allowlist."
+    },
+    "/teacherQuestions/{questionId}": {
+      "schema": { "$ref": "#/entities/TeacherQuestion" },
+      "description": "Teacher-only full question bank with answer keys."
+    },
+    "/publicQuestions/{questionId}": {
+      "schema": { "$ref": "#/entities/PublicQuestion" },
+      "description": "Sanitized student-readable questions without answer keys."
+    },
+    "/subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/Subject" },
+      "description": "Subject catalog and topic lists."
+    },
+    "/questionSets/{setId}": {
+      "schema": { "$ref": "#/entities/QuestionSet" },
+      "description": "Question sets and activation status."
+    },
+    "/teacherConfig/{configId}": {
+      "schema": { "$ref": "#/entities/TeacherConfig" },
+      "description": "Teacher-configured reward rules."
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/MultiplayerSession" },
+      "description": "Educational multiplayer classroom sessions."
+    },
+    "/sessions/{sessionId}/participants/{participantUid}": {
+      "schema": { "$ref": "#/entities/SessionParticipant" },
+      "description": "Real-time participant roster and session progress."
+    },
+    "/studentProgress/{userId}": {
+      "schema": { "$ref": "#/entities/StudentProgress" },
+      "description": "Authenticated student educational progress."
+    }
+  }
+}

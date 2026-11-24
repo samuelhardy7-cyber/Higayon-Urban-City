@@ -1,0 +1,6 @@
+{
+  "name": "Urban Life: City of Freedom",
+  "description": "An original 3D open-world urban exploration game built with React, TypeScript, and Three.js.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
