@@ -233,7 +233,7 @@ export function createDefaultSettings(): GameSettings {
     muted: false,
     musicEnabled: true,
     timeOfDay: 'siang',
-    graphicsQuality: 'medium',
+    graphicsQuality: 'high',
   };
 }
 

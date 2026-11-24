@@ -10,6 +10,10 @@ export interface CityTextures {
   woodFloorMap: THREE.CanvasTexture;
   tileFloorMap: THREE.CanvasTexture;
   contactShadowMap: THREE.CanvasTexture;
+  fabricBumpMap: THREE.CanvasTexture;
+  leatherBumpMap: THREE.CanvasTexture;
+  rooftopTileMap: THREE.CanvasTexture;
+  helipadMap: THREE.CanvasTexture;
   dispose: () => void;
 }
 
@@ -203,6 +207,75 @@ export function createCityTextures(maxAnisotropy: number): CityTextures {
   contactShadowMap.colorSpace = THREE.SRGBColorSpace;
   contactShadowMap.needsUpdate = true;
 
+  // 9. Procedural Fabric Weave Bump Map (for realistic clothing micro-relief)
+  const [fabCanvas, fctx] = makeCanvas(128, 128);
+  fctx.fillStyle = '#808080';
+  fctx.fillRect(0, 0, 128, 128);
+  for (let y = 0; y < 128; y += 2) {
+    for (let x = 0; x < 128; x += 2) {
+      const weave = ((x + y) % 4 === 0 ? 148 : 108) + Math.floor((rand() - 0.5) * 14);
+      fctx.fillStyle = `rgb(${weave},${weave},${weave})`;
+      fctx.fillRect(x, y, 2, 2);
+    }
+  }
+  const fabricBumpMap = finalizeTexture(fabCanvas, false, aniso, 5, 5);
+
+  // 10. Procedural Grained Leather / Sneaker Bump Map
+  const [lthCanvas, lctx] = makeCanvas(128, 128);
+  lctx.fillStyle = '#808080';
+  lctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 1800; i++) {
+    const x = Math.floor(rand() * 128);
+    const y = Math.floor(rand() * 128);
+    const v = 96 + Math.floor(rand() * 64);
+    lctx.fillStyle = `rgb(${v},${v},${v})`;
+    lctx.fillRect(x, y, 2, 2);
+  }
+  const leatherBumpMap = finalizeTexture(lthCanvas, false, aniso, 3, 3);
+
+  // 11. Rooftop Architectural Terrace Paver Map
+  const [rtCanvas, rtctx] = makeCanvas(256, 256);
+  rtctx.fillStyle = '#adb4bc';
+  rtctx.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 4; x++) {
+      const base = 165 + Math.floor((rand() - 0.5) * 18);
+      rtctx.fillStyle = `rgb(${base},${base + 3},${base + 7})`;
+      rtctx.fillRect(x * 64 + 2, y * 64 + 2, 60, 60);
+    }
+  }
+  const rooftopTileMap = finalizeTexture(rtCanvas, true, aniso, 6, 6);
+
+  // 12. Aviation Helipad Circle Marking Texture
+  const [hpCanvas, hpctx] = makeCanvas(512, 512);
+  hpctx.clearRect(0, 0, 512, 512);
+  hpctx.fillStyle = '#29323d';
+  hpctx.beginPath();
+  hpctx.arc(256, 256, 246, 0, Math.PI * 2);
+  hpctx.fill();
+  // Outer yellow ring
+  hpctx.strokeStyle = '#f59e0b';
+  hpctx.lineWidth = 18;
+  hpctx.setLineDash([34, 18]);
+  hpctx.beginPath();
+  hpctx.arc(256, 256, 218, 0, Math.PI * 2);
+  hpctx.stroke();
+  // Inner crisp white circle
+  hpctx.setLineDash([]);
+  hpctx.strokeStyle = '#f8fafc';
+  hpctx.lineWidth = 12;
+  hpctx.beginPath();
+  hpctx.arc(256, 256, 174, 0, Math.PI * 2);
+  hpctx.stroke();
+  // Bold H marking
+  hpctx.fillStyle = '#f8fafc';
+  hpctx.fillRect(164, 138, 36, 236);
+  hpctx.fillRect(312, 138, 36, 236);
+  hpctx.fillRect(164, 236, 184, 40);
+  const helipadMap = finalizeTexture(hpCanvas, true, aniso, 1, 1);
+  helipadMap.wrapS = THREE.ClampToEdgeWrapping;
+  helipadMap.wrapT = THREE.ClampToEdgeWrapping;
+
   return {
     asphaltMap,
     asphaltBump,
@@ -213,6 +286,10 @@ export function createCityTextures(maxAnisotropy: number): CityTextures {
     woodFloorMap,
     tileFloorMap,
     contactShadowMap,
+    fabricBumpMap,
+    leatherBumpMap,
+    rooftopTileMap,
+    helipadMap,
     dispose: () => {
       asphaltMap.dispose();
       asphaltBump.dispose();
@@ -223,6 +300,10 @@ export function createCityTextures(maxAnisotropy: number): CityTextures {
       woodFloorMap.dispose();
       tileFloorMap.dispose();
       contactShadowMap.dispose();
+      fabricBumpMap.dispose();
+      leatherBumpMap.dispose();
+      rooftopTileMap.dispose();
+      helipadMap.dispose();
     },
   };
 }

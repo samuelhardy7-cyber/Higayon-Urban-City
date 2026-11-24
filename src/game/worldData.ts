@@ -7,11 +7,13 @@ import type {
   ColliderBox,
   ContainerSpec,
   DistrictId,
+  ExteriorLadderSpec,
   FountainSpec,
   HouseSpec,
   LandmarkPin,
   NpcWaypointLoop,
   ParkedVehicleSpec,
+  RooftopSpec,
   StreetLampSpec,
   TrafficSignSpec,
   TreeSpec,
@@ -43,6 +45,7 @@ function pushCollider(
   maxY: number,
   kind: ColliderBox['kind'],
   blocksCamera: boolean,
+  vaultable = false,
 ): void {
   colliders.push({
     id,
@@ -54,6 +57,7 @@ function pushCollider(
     maxZ: cz + d * 0.5,
     kind,
     blocksCamera,
+    vaultable,
   });
 }
 
@@ -172,7 +176,7 @@ function createCityLayout(): CityLayout {
           style: 'skyscraper',
           primaryColor: 0xdbe3eb,
           accentColor: 0x315f80,
-          hasSetback: true,
+          hasSetback: false,
           hasSpire: true,
         });
         pushCollider(
@@ -257,7 +261,7 @@ function createCityLayout(): CityLayout {
         );
 
         benches.push({ x: bx + 6.5, y: SIDEWALK_HEIGHT, z: bz + 1.4, rotY: 0 });
-        pushCollider(colliders, 'dt_bench_1', bx + 6.5, bz + 1.4, 2.1, 0.75, 0, 0.9, 'prop', false);
+        pushCollider(colliders, 'dt_bench_1', bx + 6.5, bz + 1.4, 2.1, 0.75, 0, 0.9, 'prop', false, true);
         trees.push({ x: bx - 8.5, y: SIDEWALK_HEIGHT, z: bz + 8.5, scale: 1.0, tint: 0x3e7d48, kind: 'deciduous' });
         pushCollider(colliders, 'dt_tree_1', bx - 8.5, bz + 8.5, 0.85, 0.85, 0, 4.5, 'prop', false);
       } else if (cfg.type === 'downtown_mall') {
@@ -965,7 +969,299 @@ function createCityLayout(): CityLayout {
     { id: 'lm_park', label: 'Emerald Park', shortCode: 'P', district: 'residential', x: -21, z: 21, color: '#34d399' },
     { id: 'lm_port', label: 'Harbor Port', shortCode: 'H', district: 'industrial', x: 74, z: -32, color: '#fb923c' },
     { id: 'lm_beach', label: 'Coastal Pier & Beach', shortCode: 'B', district: 'coastal', x: 102, z: 42, color: '#22d3ee' },
+    { id: 'lm_airport', label: 'City Airport', shortCode: 'AP', district: 'downtown', x: -92, z: -92, color: '#a78bfa' },
   ];
+
+  // Physical Rooftops (6 climbable & interior-accessible 3D rooftop decks)
+  const addPerimeterRailings = (
+    idPrefix: string,
+    minX: number,
+    maxX: number,
+    minZ: number,
+    maxZ: number,
+    y: number,
+    gap?: { side: 'n' | 's' | 'e' | 'w'; center: number; halfWidth: number },
+  ) => {
+    const h = 1.15;
+    const t = 0.24;
+    const cx = (minX + maxX) * 0.5;
+    const cz = (minZ + maxZ) * 0.5;
+    const w = maxX - minX;
+    const d = maxZ - minZ;
+
+    const addSegmentedH = (side: 'n' | 's', zPos: number) => {
+      if (gap && gap.side === side) {
+        const leftW = gap.center - gap.halfWidth - minX;
+        if (leftW > 0.4) {
+          pushCollider(colliders, `${idPrefix}_${side}1`, minX + leftW * 0.5, zPos, leftW, t, y, y + h, 'barrier', false);
+        }
+        const rightW = maxX - (gap.center + gap.halfWidth);
+        if (rightW > 0.4) {
+          pushCollider(colliders, `${idPrefix}_${side}2`, maxX - rightW * 0.5, zPos, rightW, t, y, y + h, 'barrier', false);
+        }
+      } else {
+        pushCollider(colliders, `${idPrefix}_${side}`, cx, zPos, w, t, y, y + h, 'barrier', false);
+      }
+    };
+    const addSegmentedV = (side: 'w' | 'e', xPos: number) => {
+      if (gap && gap.side === side) {
+        const topD = gap.center - gap.halfWidth - minZ;
+        if (topD > 0.4) {
+          pushCollider(colliders, `${idPrefix}_${side}1`, xPos, minZ + topD * 0.5, t, topD, y, y + h, 'barrier', false);
+        }
+        const botD = maxZ - (gap.center + gap.halfWidth);
+        if (botD > 0.4) {
+          pushCollider(colliders, `${idPrefix}_${side}2`, xPos, maxZ - botD * 0.5, t, botD, y, y + h, 'barrier', false);
+        }
+      } else {
+        pushCollider(colliders, `${idPrefix}_${side}`, xPos, cz, t, d, y, y + h, 'barrier', false);
+      }
+    };
+
+    addSegmentedH('n', minZ + t * 0.5);
+    addSegmentedH('s', maxZ - t * 0.5);
+    addSegmentedV('w', minX + t * 0.5);
+    addSegmentedV('e', maxX - t * 0.5);
+  };
+
+  const rooftops: RooftopSpec[] = [
+    {
+      id: 'roof_freedom_tower',
+      buildingId: 'freedom_tower',
+      name: 'CITY TOWER Skydeck & Helipad',
+      minX: -32.5,
+      maxX: -18.5,
+      minZ: -32.5,
+      maxZ: -18.5,
+      y: SIDEWALK_HEIGHT + 76,
+      theme: 'helipad_skydeck',
+      hasHelipad: true,
+      hasGarden: true,
+      hasTelescopes: true,
+      interiorAccessDoor: { x: -20.8, z: -28.6, yaw: 0, targetFloor: 22 },
+      props: [
+        { id: 'rt_ft_stair', kind: 'stairhouse', x: -20.8, z: -30.5, width: 3.4, depth: 3.0, height: 3.1, color: 0x334155 },
+        { id: 'rt_ft_tele1', kind: 'telescope', x: -25.5, z: -19.5, width: 0.7, depth: 0.7, height: 1.35, rotY: 0 },
+        { id: 'rt_ft_tele2', kind: 'telescope', x: -19.5, z: -23.0, width: 0.7, depth: 0.7, height: 1.35, rotY: -Math.PI * 0.5 },
+        { id: 'rt_ft_planter1', kind: 'planter', x: -30.5, z: -20.5, width: 2.2, depth: 1.0, height: 0.75, vaultable: true, color: 0x10b981 },
+        { id: 'rt_ft_bench1', kind: 'bench', x: -22.2, z: -20.2, width: 2.0, depth: 0.75, height: 0.85, rotY: Math.PI, vaultable: true },
+        { id: 'rt_ft_hvac1', kind: 'hvac', x: -30.6, z: -30.6, width: 1.8, depth: 1.5, height: 0.9, vaultable: true },
+      ],
+    },
+    {
+      id: 'roof_civic_office',
+      buildingId: 'civic_office_east',
+      name: 'Civic Center Garden Terrace',
+      minX: -17.25,
+      maxX: -8.75,
+      minZ: -32.5,
+      maxZ: -21.5,
+      y: SIDEWALK_HEIGHT + 24,
+      theme: 'garden_terrace',
+      hasGarden: true,
+      hasTelescopes: true,
+      interiorAccessDoor: { x: -15.0, z: -29.2, yaw: 0, targetFloor: 2 },
+      props: [
+        { id: 'rt_co_stair', kind: 'stairhouse', x: -15.0, z: -30.8, width: 3.0, depth: 2.6, height: 2.9, color: 0x475569 },
+        { id: 'rt_co_pergola', kind: 'pergola', x: -12.2, z: -25.0, width: 4.2, depth: 3.6, height: 2.7, color: 0x92400e },
+        { id: 'rt_co_bench', kind: 'bench', x: -12.2, z: -25.0, width: 2.0, depth: 0.75, height: 0.85, rotY: 0, vaultable: true },
+        { id: 'rt_co_tree1', kind: 'tree', x: -15.5, z: -23.0, width: 1.0, depth: 1.0, height: 3.4 },
+        { id: 'rt_co_planter', kind: 'planter', x: -10.5, z: -22.8, width: 2.0, depth: 0.9, height: 0.75, vaultable: true, color: 0x22c55e },
+        { id: 'rt_co_tele', kind: 'telescope', x: -13.0, z: -22.3, width: 0.7, depth: 0.7, height: 1.35, rotY: 0 },
+      ],
+    },
+    {
+      id: 'roof_freedom_mall',
+      buildingId: 'freedom_mall',
+      name: 'Freedom Mall Sky Garden',
+      minX: 10.0,
+      maxX: 32.0,
+      minZ: -32.0,
+      maxZ: -18.0,
+      y: SIDEWALK_HEIGHT + 11.5,
+      theme: 'garden_terrace',
+      hasGarden: true,
+      hasTelescopes: true,
+      interiorAccessDoor: { x: 14.2, z: -29.0, yaw: 0, targetFloor: 2 },
+      props: [
+        { id: 'rt_fm_stair', kind: 'stairhouse', x: 14.2, z: -30.6, width: 3.2, depth: 2.8, height: 2.9, color: 0x334155 },
+        { id: 'rt_fm_pergola', kind: 'pergola', x: 25.5, z: -25.0, width: 5.2, depth: 4.2, height: 2.8, color: 0x78350f },
+        { id: 'rt_fm_tree1', kind: 'tree', x: 19.0, z: -21.0, width: 1.0, depth: 1.0, height: 3.6 },
+        { id: 'rt_fm_tree2', kind: 'tree', x: 29.8, z: -20.5, width: 1.0, depth: 1.0, height: 3.4 },
+        { id: 'rt_fm_planter1', kind: 'planter', x: 21.0, z: -25.0, width: 2.4, depth: 1.0, height: 0.75, vaultable: true, color: 0x16a34a },
+        { id: 'rt_fm_hvac', kind: 'hvac', x: 29.5, z: -29.8, width: 2.0, depth: 1.6, height: 0.9, vaultable: true },
+        { id: 'rt_fm_bench', kind: 'bench', x: 25.5, z: -25.0, width: 2.2, depth: 0.75, height: 0.85, rotY: 0, vaultable: true },
+        { id: 'rt_fm_tele', kind: 'telescope', x: 21.0, z: -18.9, width: 0.7, depth: 0.7, height: 1.35, rotY: 0 },
+      ],
+    },
+    {
+      id: 'roof_reward_center',
+      buildingId: 'city_reward_center',
+      name: 'Reward Center VIP Lookout',
+      minX: 9.5,
+      maxX: 17.5,
+      minZ: 24.7,
+      maxZ: 32.9,
+      y: SIDEWALK_HEIGHT + 6.8,
+      theme: 'lounge_deck',
+      hasGarden: true,
+      hasTelescopes: true,
+      props: [
+        { id: 'rt_rc_pergola', kind: 'pergola', x: 13.5, z: 27.2, width: 4.0, depth: 3.4, height: 2.6, color: 0xf59e0b },
+        { id: 'rt_rc_bench', kind: 'bench', x: 13.5, z: 27.2, width: 2.0, depth: 0.75, height: 0.85, rotY: 0, vaultable: true },
+        { id: 'rt_rc_planter', kind: 'planter', x: 11.2, z: 30.8, width: 1.8, depth: 0.9, height: 0.72, vaultable: true, color: 0x10b981 },
+        { id: 'rt_rc_tele', kind: 'telescope', x: 15.8, z: 25.6, width: 0.7, depth: 0.7, height: 1.35, rotY: Math.PI },
+      ],
+    },
+    {
+      id: 'roof_ind_warehouse',
+      buildingId: 'ind_warehouse',
+      name: 'Logistics Warehouse Helipad',
+      minX: 65.05,
+      maxX: 74.55,
+      minZ: -24.75,
+      maxZ: -10.25,
+      y: SIDEWALK_HEIGHT + 7.5,
+      theme: 'industrial_helipad',
+      hasHelipad: true,
+      hasTelescopes: false,
+      interiorAccessDoor: { x: 72.5, z: -21.8, yaw: 0, targetFloor: 2 },
+      props: [
+        { id: 'rt_iw_stair', kind: 'stairhouse', x: 72.5, z: -23.3, width: 2.8, depth: 2.4, height: 2.7, color: 0x475569 },
+        { id: 'rt_iw_hvac1', kind: 'hvac', x: 67.2, z: -22.5, width: 1.9, depth: 1.5, height: 0.88, vaultable: true },
+        { id: 'rt_iw_hvac2', kind: 'hvac', x: 67.2, z: -12.4, width: 1.9, depth: 1.5, height: 0.88, vaultable: true },
+      ],
+    },
+    {
+      id: 'roof_coral_resort',
+      buildingId: 'resort_2_2',
+      name: 'Coral Bay Ocean Lounge',
+      minX: 21.05,
+      maxX: 32.55,
+      minZ: 11.75,
+      maxZ: 23.25,
+      y: SIDEWALK_HEIGHT + 13.5,
+      theme: 'coastal_terrace',
+      hasGarden: true,
+      hasTelescopes: true,
+      props: [
+        { id: 'rt_cr_pergola', kind: 'pergola', x: 28.5, z: 17.0, width: 4.5, depth: 4.0, height: 2.7, color: 0x92400e },
+        { id: 'rt_cr_bench', kind: 'bench', x: 28.5, z: 17.0, width: 2.0, depth: 0.75, height: 0.85, rotY: -Math.PI * 0.5, vaultable: true },
+        { id: 'rt_cr_planter', kind: 'planter', x: 23.8, z: 21.2, width: 2.0, depth: 0.9, height: 0.72, vaultable: true, color: 0x10b981 },
+        { id: 'rt_cr_tele', kind: 'telescope', x: 31.4, z: 17.5, width: 0.7, depth: 0.7, height: 1.35, rotY: -Math.PI * 0.5 },
+      ],
+    },
+  ];
+
+  const ladders: ExteriorLadderSpec[] = [
+    {
+      id: 'ladder_civic_office',
+      buildingId: 'civic_office_east',
+      label: 'Civic Center Roof Ladder',
+      x: -8.75,
+      z: -27.0,
+      normalX: 1,
+      normalZ: 0,
+      climbYaw: Math.PI * 0.5,
+      bottomY: SIDEWALK_HEIGHT,
+      topY: SIDEWALK_HEIGHT + 24,
+      topStepX: -9.85,
+      topStepZ: -27.0,
+    },
+    {
+      id: 'ladder_freedom_mall',
+      buildingId: 'freedom_mall',
+      label: 'Mall Sky Garden Ladder',
+      x: 10.0,
+      z: -25.0,
+      normalX: -1,
+      normalZ: 0,
+      climbYaw: -Math.PI * 0.5,
+      bottomY: SIDEWALK_HEIGHT,
+      topY: SIDEWALK_HEIGHT + 11.5,
+      topStepX: 11.1,
+      topStepZ: -25.0,
+    },
+    {
+      id: 'ladder_reward_center',
+      buildingId: 'city_reward_center',
+      label: 'VIP Lookout Ladder',
+      x: 13.5,
+      z: 32.9,
+      normalX: 0,
+      normalZ: 1,
+      climbYaw: 0,
+      bottomY: SIDEWALK_HEIGHT,
+      topY: SIDEWALK_HEIGHT + 6.8,
+      topStepX: 13.5,
+      topStepZ: 31.8,
+    },
+    {
+      id: 'ladder_ind_warehouse',
+      buildingId: 'ind_warehouse',
+      label: 'Warehouse Helipad Ladder',
+      x: 65.05,
+      z: -17.5,
+      normalX: -1,
+      normalZ: 0,
+      climbYaw: -Math.PI * 0.5,
+      bottomY: SIDEWALK_HEIGHT,
+      topY: SIDEWALK_HEIGHT + 7.5,
+      topStepX: 66.15,
+      topStepZ: -17.5,
+    },
+    {
+      id: 'ladder_coral_resort',
+      buildingId: 'resort_2_2',
+      label: 'Ocean Lounge Ladder',
+      x: 26.8,
+      z: 23.25,
+      normalX: 0,
+      normalZ: 1,
+      climbYaw: 0,
+      bottomY: SIDEWALK_HEIGHT,
+      topY: SIDEWALK_HEIGHT + 13.5,
+      topStepX: 26.8,
+      topStepZ: 22.15,
+    },
+  ];
+
+  const ladderGapByBuilding: Record<string, { side: 'n' | 's' | 'e' | 'w'; center: number; halfWidth: number }> = {
+    civic_office_east: { side: 'e', center: -27.0, halfWidth: 0.75 },
+    freedom_mall: { side: 'w', center: -25.0, halfWidth: 0.75 },
+    city_reward_center: { side: 's', center: 13.5, halfWidth: 0.75 },
+    ind_warehouse: { side: 'w', center: -17.5, halfWidth: 0.75 },
+    resort_2_2: { side: 's', center: 26.8, halfWidth: 0.75 },
+  };
+
+  for (const roof of rooftops) {
+    addPerimeterRailings(
+      roof.id,
+      roof.minX,
+      roof.maxX,
+      roof.minZ,
+      roof.maxZ,
+      roof.y,
+      ladderGapByBuilding[roof.buildingId],
+    );
+    for (const prop of roof.props) {
+      if (prop.kind === 'stairhouse' || prop.kind === 'planter' || prop.kind === 'bench' || prop.kind === 'hvac') {
+        pushCollider(
+          colliders,
+          prop.id,
+          prop.x,
+          prop.z,
+          prop.width,
+          prop.depth,
+          roof.y,
+          roof.y + prop.height,
+          prop.kind === 'stairhouse' ? 'building' : 'prop',
+          prop.kind === 'stairhouse',
+          Boolean(prop.vaultable),
+        );
+      }
+    }
+  }
 
   // Connected sidewalk loops for autonomous NPCs (clear center of 3m sidewalks)
   const npcLoops: NpcWaypointLoop[] = [
@@ -1067,13 +1363,35 @@ function createCityLayout(): CityLayout {
     fountains,
     landmarks,
     npcLoops,
+    ladders,
+    rooftops,
     colliders,
   };
 }
 
 export const CITY_LAYOUT: CityLayout = createCityLayout();
 
-export function getGroundHeightAt(x: number, z: number, layout: CityLayout = CITY_LAYOUT): number {
+export function getGroundHeightAt(
+  x: number,
+  z: number,
+  layout: CityLayout = CITY_LAYOUT,
+  currentY?: number,
+): number {
+  if (typeof currentY === 'number') {
+    for (let i = 0; i < layout.rooftops.length; i++) {
+      const r = layout.rooftops[i];
+      if (
+        currentY >= r.y - 1.35 &&
+        x >= r.minX - 0.3 &&
+        x <= r.maxX + 0.3 &&
+        z >= r.minZ - 0.3 &&
+        z <= r.maxZ + 0.3
+      ) {
+        return r.y;
+      }
+    }
+  }
+
   // Coastal Tourist Pier (x = 95..118, z in [39..45]) sits above water at sidewalkHeight
   if (x >= 95 && x <= 118.5 && z >= 39 && z <= 45) {
     return layout.sidewalkHeight + 0.04;
@@ -1142,6 +1460,7 @@ export function resolveCircleAABBCollision(
   playerY: number,
   playerHeight: number,
   layout: CityLayout = CITY_LAYOUT,
+  skipColliderId?: string | null,
 ): { x: number; z: number; collided: boolean } {
   // Clamp East coastline: allow walking on Industrial Wharf (x<=102.5, z<-14),
   // Coastal Beach up to shoreline (x<=106.5, z>=-6), or Tourist Pier (x<=117.5, z in [39.5..44.5])
@@ -1161,6 +1480,9 @@ export function resolveCircleAABBCollision(
   for (let pass = 0; pass < 2; pass++) {
     for (let i = 0; i < layout.colliders.length; i++) {
       const box = layout.colliders[i];
+      if (skipColliderId && box.id === skipColliderId) {
+        continue;
+      }
       if (box.maxY <= playerY + 0.12 || box.minY >= playerY + playerHeight) {
         continue;
       }

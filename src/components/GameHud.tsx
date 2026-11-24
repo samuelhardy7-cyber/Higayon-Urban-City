@@ -1,4 +1,4 @@
-import { useRef, useState, type FC, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type FC, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ArrowDown,
   ArrowLeft,
@@ -6,6 +6,7 @@ import {
   ArrowUp,
   ArrowUpDown,
   Building2,
+  Camera,
   Car,
   CheckCircle2,
   ChevronDown,
@@ -34,6 +35,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { EmoteKind } from '../game/characterAnimator';
+import { computeResponsiveJoystickMetrics } from '../game/joystickUtils';
 import type { MultiplayerSessionSnapshot } from '../game/multiplayerTypes';
 import type { DrivingInputState, HudSnapshot, TimeOfDayPhase } from '../game/types';
 import { CityMinimap } from './CityMinimap';
@@ -48,6 +50,7 @@ interface GameHudProps {
   onPause: () => void;
   onToggleMute: () => void;
   onCycleTimeOfDay: () => void;
+  onOpenPhotoMode: () => void;
   onOpenGarage: () => void;
   onOpenCustomize: () => void;
   onOpenShop: () => void;
@@ -101,6 +104,7 @@ export const GameHud: FC<GameHudProps> = ({
   onPause,
   onToggleMute,
   onCycleTimeOfDay,
+  onOpenPhotoMode,
   onOpenGarage,
   onOpenCustomize,
   onOpenShop,
@@ -120,26 +124,72 @@ export const GameHud: FC<GameHudProps> = ({
   const [joyOffset, setJoyOffset] = useState({ x: 0, y: 0 });
   const [sprintLocked, setSprintLocked] = useState(false);
   const [objectivesExpanded, setObjectivesExpanded] = useState(false);
+  const hudRootRef = useRef<HTMLDivElement | null>(null);
   const joyBaseRef = useRef<HTMLDivElement | null>(null);
   const joyPointerId = useRef<number | null>(null);
 
-  const maxRadius = 38;
+  const readMetrics = () => {
+    if (typeof window === 'undefined') {
+      return computeResponsiveJoystickMetrics(1024, 768, false);
+    }
+    const vw = window.visualViewport?.width ?? window.innerWidth;
+    const vh = window.visualViewport?.height ?? window.innerHeight;
+    const coarse = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
+    return computeResponsiveJoystickMetrics(vw, vh, coarse);
+  };
+
+  const [joyMetrics, setJoyMetrics] = useState(readMetrics);
+
+  useEffect(() => {
+    const refresh = () => {
+      const next = readMetrics();
+      setJoyMetrics(next);
+      setJoyOffset((prev) => {
+        const d = Math.hypot(prev.x, prev.y);
+        if (d <= next.maxRadiusPx || d === 0) return prev;
+        const scale = next.maxRadiusPx / d;
+        return { x: prev.x * scale, y: prev.y * scale };
+      });
+    };
+
+    refresh();
+    window.addEventListener('resize', refresh);
+    window.addEventListener('orientationchange', refresh);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', refresh);
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && hudRootRef.current) {
+      ro = new ResizeObserver(refresh);
+      ro.observe(hudRootRef.current);
+    }
+
+    return () => {
+      window.removeEventListener('resize', refresh);
+      window.removeEventListener('orientationchange', refresh);
+      vv?.removeEventListener('resize', refresh);
+      ro?.disconnect();
+    };
+  }, []);
+
+  const maxRadius = joyMetrics.maxRadiusPx;
 
   const updateJoystick = (clientX: number, clientY: number) => {
     const el = joyBaseRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
+    const radius = Math.max(22, Math.min(maxRadius, rect.width * 0.38));
     const cx = rect.left + rect.width * 0.5;
     const cy = rect.top + rect.height * 0.5;
     let dx = clientX - cx;
     let dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
-    if (dist > maxRadius) {
-      dx = (dx / dist) * maxRadius;
-      dy = (dy / dist) * maxRadius;
+    if (dist > radius) {
+      dx = (dx / dist) * radius;
+      dy = (dy / dist) * radius;
     }
     setJoyOffset({ x: dx, y: dy });
-    onMobileMove(dx / maxRadius, -dy / maxRadius);
+    onMobileMove(dx / radius, -dy / radius);
   };
 
   const handleJoyDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -190,7 +240,10 @@ export const GameHud: FC<GameHudProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 sm:p-5">
+    <div
+      ref={hudRootRef}
+      className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-2.5 sm:p-5"
+    >
       {/* Top Row: Left District/Money/Health/Wanted/Mission | Right Minimap & Controls */}
       <div className="flex items-start justify-between gap-2.5 sm:gap-4">
         <div className="flex flex-col gap-2">
@@ -264,6 +317,25 @@ export const GameHud: FC<GameHudProps> = ({
                     </span>
                   </button>
                 )}
+              </div>
+            )}
+
+            {!interior && snapshot.activeRooftopName && (
+              <div
+                data-testid="hud-rooftop-badge"
+                className="mt-1 flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono-hud text-amber-300 font-semibold"
+              >
+                <Building2 className="w-3 h-3 shrink-0 text-amber-400" />
+                <span className="truncate">{snapshot.activeRooftopName}</span>
+              </div>
+            )}
+
+            {snapshot.isClimbingLadder && (
+              <div
+                data-testid="hud-ladder-badge"
+                className="mt-1 rounded bg-sky-500/20 border border-sky-400/45 px-2 py-0.5 text-[10px] font-mono-hud text-sky-200 font-semibold"
+              >
+                Climbing Ladder · W/S Climb · Jump Dismount
               </div>
             )}
 
@@ -577,6 +649,21 @@ export const GameHud: FC<GameHudProps> = ({
             >
               {renderTimeIcon(snapshot.timeOfDay)}
             </button>
+            <button
+              type="button"
+              tabIndex={-1}
+              data-testid="hud-photo-btn"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onOpenPhotoMode();
+              }}
+              aria-label="Open Photo Studio Mode"
+              title="Photo Studio Mode (V)"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg border border-amber-400/35 flex items-center justify-center text-amber-300 hover:bg-slate-800 hover:border-amber-400 transition-colors focus-visible:outline-2 focus-visible:outline-amber-400"
+              style={{ backgroundColor: 'rgba(15, 23, 42, 0.86)' }}
+            >
+              <Camera className="w-4 h-4" />
+            </button>
           </div>
 
           <div className="flex flex-col items-end gap-1.5">
@@ -751,36 +838,48 @@ export const GameHud: FC<GameHudProps> = ({
           </div>
         )}
 
-        {/* Mobile Touch Controls (< lg) */}
-        {isDriving ? (
+        {/* Responsive Touch Controls (mobile portrait/landscape & touch tablets) */}
+        {joyMetrics.showTouchControls && (isDriving ? (
           /* Mobile Driving Controls: Left/Right Steering | Exit, Brake/Reverse, Gas */
-          <div className="flex lg:hidden items-end justify-between w-full px-1 pb-1">
+          <div
+            data-testid="mobile-driving-controls"
+            className="flex items-end justify-between w-full px-1"
+            style={{ paddingBottom: `${joyMetrics.bottomOffsetPx}px` }}
+          >
             {/* Left / Right Steering Buttons */}
-            <div className="pointer-events-auto flex items-center gap-2.5">
+            <div className="pointer-events-auto flex items-center" style={{ gap: `${joyMetrics.gapPx}px` }}>
               <button
                 type="button"
                 data-testid="mobile-steer-left"
                 aria-label="Steer left"
                 {...makeDrivingHoldHandlers('steerLeft')}
-                className="w-16 h-16 rounded-xl border-2 border-white/25 text-white flex items-center justify-center active:bg-amber-500 active:text-slate-950 transition-colors touch-none"
-                style={{ backgroundColor: 'rgba(15, 23, 42, 0.78)' }}
+                className="rounded-xl border-2 border-white/25 text-white flex items-center justify-center active:bg-amber-500 active:text-slate-950 transition-colors touch-none"
+                style={{
+                  backgroundColor: 'rgba(15, 23, 42, 0.78)',
+                  width: `${joyMetrics.drivingSteerSizePx}px`,
+                  height: `${joyMetrics.drivingSteerSizePx}px`,
+                }}
               >
-                <ArrowLeft className="w-7 h-7" />
+                <ArrowLeft className="w-6 h-6" />
               </button>
               <button
                 type="button"
                 data-testid="mobile-steer-right"
                 aria-label="Steer right"
                 {...makeDrivingHoldHandlers('steerRight')}
-                className="w-16 h-16 rounded-xl border-2 border-white/25 text-white flex items-center justify-center active:bg-amber-500 active:text-slate-950 transition-colors touch-none"
-                style={{ backgroundColor: 'rgba(15, 23, 42, 0.78)' }}
+                className="rounded-xl border-2 border-white/25 text-white flex items-center justify-center active:bg-amber-500 active:text-slate-950 transition-colors touch-none"
+                style={{
+                  backgroundColor: 'rgba(15, 23, 42, 0.78)',
+                  width: `${joyMetrics.drivingSteerSizePx}px`,
+                  height: `${joyMetrics.drivingSteerSizePx}px`,
+                }}
               >
-                <ArrowRight className="w-7 h-7" />
+                <ArrowRight className="w-6 h-6" />
               </button>
             </div>
 
             {/* Exit + Brake/Reverse + Accelerate */}
-            <div className="pointer-events-auto flex items-end gap-2.5">
+            <div className="pointer-events-auto flex items-end" style={{ gap: `${joyMetrics.gapPx}px` }}>
               <button
                 type="button"
                 data-testid="mobile-exit"
@@ -789,8 +888,12 @@ export const GameHud: FC<GameHudProps> = ({
                   e.stopPropagation();
                   onInteract();
                 }}
-                className="w-12 h-12 rounded-full border-2 border-white/25 text-white flex flex-col items-center justify-center text-[10px] font-semibold"
-                style={{ backgroundColor: 'rgba(15, 23, 42, 0.8)' }}
+                className="rounded-full border-2 border-white/25 text-white flex flex-col items-center justify-center text-[10px] font-semibold"
+                style={{
+                  backgroundColor: 'rgba(15, 23, 42, 0.8)',
+                  width: `${joyMetrics.actionBtnSizePx}px`,
+                  height: `${joyMetrics.actionBtnSizePx}px`,
+                }}
               >
                 <DoorOpen className="w-4 h-4" />
                 <span>Exit</span>
@@ -801,8 +904,12 @@ export const GameHud: FC<GameHudProps> = ({
                 data-testid="mobile-brake"
                 aria-label="Brake or Reverse"
                 {...makeDrivingHoldHandlers('brakeReverse')}
-                className="w-14 h-16 rounded-xl border-2 border-red-400/50 text-white flex flex-col items-center justify-center text-[10px] font-semibold active:bg-red-500 transition-colors touch-none"
-                style={{ backgroundColor: 'rgba(15, 23, 42, 0.82)' }}
+                className="rounded-xl border-2 border-red-400/50 text-white flex flex-col items-center justify-center text-[10px] font-semibold active:bg-red-500 transition-colors touch-none"
+                style={{
+                  backgroundColor: 'rgba(15, 23, 42, 0.82)',
+                  width: `${joyMetrics.drivingPedalWidthPx}px`,
+                  height: `${joyMetrics.drivingSteerSizePx}px`,
+                }}
               >
                 <ArrowDown className="w-5 h-5" />
                 <span>Brake</span>
@@ -813,8 +920,12 @@ export const GameHud: FC<GameHudProps> = ({
                 data-testid="mobile-accelerate"
                 aria-label="Accelerate"
                 {...makeDrivingHoldHandlers('accelerate')}
-                className="w-16 h-20 rounded-xl border-2 border-amber-400/70 text-white flex flex-col items-center justify-center text-xs font-semibold active:bg-amber-500 active:text-slate-950 transition-colors touch-none"
-                style={{ backgroundColor: 'rgba(15, 23, 42, 0.86)' }}
+                className="rounded-xl border-2 border-amber-400/70 text-white flex flex-col items-center justify-center text-xs font-semibold active:bg-amber-500 active:text-slate-950 transition-colors touch-none"
+                style={{
+                  backgroundColor: 'rgba(15, 23, 42, 0.86)',
+                  width: `${joyMetrics.drivingSteerSizePx}px`,
+                  height: `${joyMetrics.drivingGasHeightPx}px`,
+                }}
               >
                 <ArrowUp className="w-6 h-6" />
                 <span>Gas</span>
@@ -822,8 +933,12 @@ export const GameHud: FC<GameHudProps> = ({
             </div>
           </div>
         ) : (
-          /* Mobile On-Foot Controls: Joystick | Interact, Run, Jump */
-          <div className="flex lg:hidden items-end justify-between w-full px-1 pb-1">
+          /* Mobile On-Foot Controls: Dynamic Joystick | Interact, Run, Jump */
+          <div
+            data-testid="mobile-foot-controls"
+            className="flex items-end justify-between w-full px-1"
+            style={{ paddingBottom: `${joyMetrics.bottomOffsetPx}px` }}
+          >
             <div
               ref={joyBaseRef}
               data-testid="mobile-joystick"
@@ -831,20 +946,27 @@ export const GameHud: FC<GameHudProps> = ({
               onPointerMove={handleJoyMove}
               onPointerUp={handleJoyUp}
               onPointerCancel={handleJoyUp}
-              className="pointer-events-auto relative w-28 h-28 rounded-full border-2 border-white/25 flex items-center justify-center touch-none"
-              style={{ backgroundColor: 'rgba(15, 23, 42, 0.55)' }}
+              className="pointer-events-auto relative rounded-full border-2 border-white/25 flex items-center justify-center touch-none transition-[width,height] duration-150"
+              style={{
+                backgroundColor: 'rgba(15, 23, 42, 0.55)',
+                width: `${joyMetrics.padSizePx}px`,
+                height: `${joyMetrics.padSizePx}px`,
+              }}
               aria-label="Movement joystick"
             >
               <div
-                className="w-12 h-12 rounded-full border border-amber-300/60 shadow-md pointer-events-none"
+                data-testid="mobile-joystick-knob"
+                className="rounded-full border border-amber-300/60 shadow-md pointer-events-none"
                 style={{
                   backgroundColor: 'rgba(245, 158, 11, 0.88)',
+                  width: `${joyMetrics.knobSizePx}px`,
+                  height: `${joyMetrics.knobSizePx}px`,
                   transform: `translate(${joyOffset.x}px, ${joyOffset.y}px)`,
                 }}
               />
             </div>
 
-            <div className="pointer-events-auto flex items-end gap-2.5">
+            <div className="pointer-events-auto flex items-end" style={{ gap: `${joyMetrics.gapPx}px` }}>
               <button
                 type="button"
                 data-testid="mobile-interact"
@@ -853,14 +975,16 @@ export const GameHud: FC<GameHudProps> = ({
                   e.stopPropagation();
                   onInteract();
                 }}
-                className={`w-14 h-14 rounded-full border-2 flex flex-col items-center justify-center text-[10px] font-semibold transition-colors ${
+                className={`rounded-full border-2 flex flex-col items-center justify-center text-[10px] font-semibold transition-colors ${
                   snapshot.interactPrompt
                     ? 'border-amber-300 bg-amber-500 text-slate-950'
                     : 'border-white/20 text-slate-300'
                 }`}
-                style={
-                  snapshot.interactPrompt ? undefined : { backgroundColor: 'rgba(15, 23, 42, 0.72)' }
-                }
+                style={{
+                  ...(snapshot.interactPrompt ? {} : { backgroundColor: 'rgba(15, 23, 42, 0.72)' }),
+                  width: `${joyMetrics.actionBtnSizePx}px`,
+                  height: `${joyMetrics.actionBtnSizePx}px`,
+                }}
               >
                 <Hand className="w-4 h-4" />
                 <span>Interact</span>
@@ -877,12 +1001,16 @@ export const GameHud: FC<GameHudProps> = ({
                 }}
                 aria-label="Toggle sprint"
                 aria-pressed={sprintLocked}
-                className={`w-14 h-14 rounded-full border-2 flex flex-col items-center justify-center text-[11px] font-semibold transition-colors ${
+                className={`rounded-full border-2 flex flex-col items-center justify-center text-[11px] font-semibold transition-colors ${
                   sprintLocked
                     ? 'border-amber-300 bg-amber-500 text-slate-950'
                     : 'border-white/25 text-white'
                 }`}
-                style={sprintLocked ? undefined : { backgroundColor: 'rgba(15, 23, 42, 0.72)' }}
+                style={{
+                  ...(sprintLocked ? {} : { backgroundColor: 'rgba(15, 23, 42, 0.72)' }),
+                  width: `${joyMetrics.actionBtnSizePx}px`,
+                  height: `${joyMetrics.actionBtnSizePx}px`,
+                }}
               >
                 <Zap className="w-4 h-4" />
                 <span>Run</span>
@@ -904,15 +1032,19 @@ export const GameHud: FC<GameHudProps> = ({
                   onMobileJump(false);
                 }}
                 aria-label="Jump"
-                className="w-16 h-16 rounded-full border-2 border-white/30 text-white flex flex-col items-center justify-center text-xs font-semibold active:scale-95 transition-transform"
-                style={{ backgroundColor: 'rgba(15, 23, 42, 0.78)' }}
+                className="rounded-full border-2 border-white/30 text-white flex flex-col items-center justify-center text-xs font-semibold active:scale-95 transition-transform"
+                style={{
+                  backgroundColor: 'rgba(15, 23, 42, 0.78)',
+                  width: `${joyMetrics.jumpBtnSizePx}px`,
+                  height: `${joyMetrics.jumpBtnSizePx}px`,
+                }}
               >
                 <ArrowUp className="w-5 h-5" />
                 <span>Jump</span>
               </button>
             </div>
           </div>
-        )}
+        ))}
 
         {/* Nearby Classmate Quick Social Strip */}
         {snapshot.playerMode === 'on_foot' &&
@@ -1030,12 +1162,12 @@ export const GameHud: FC<GameHudProps> = ({
             style={{ backgroundColor: 'rgba(15, 23, 42, 0.72)' }}
           >
             {isDriving
-              ? 'W/S Gas & Reverse · A/D Steer · Space Handbrake · E Exit · G Garage · K Shop · Esc Pause'
+              ? 'W/S Gas & Reverse · A/D Steer · Space Handbrake · E Exit · V Photo · G Garage · K Shop · Esc Pause'
               : interior
-                ? 'WASD Move · Space Jump · E Door / Kiosk / Exit · B Emotes · K Shop · Esc Pause'
+                ? 'WASD Move · Space Jump · E Door / Kiosk / Exit · B Emotes · V Photo · K Shop · Esc Pause'
                 : snapshot.pointerLocked
-                  ? 'WASD Move · Shift Sprint · E Interact · B Emotes · K Reward Shop · G Garage · T Time'
-                  : 'Click or Drag Camera · WASD Move · E Interact · B Emotes · K Reward Shop · G Garage'}
+                  ? 'WASD Move · Shift Sprint · E Interact · B Emotes · V Photo · K Shop · G Garage · T Time'
+                  : 'Click or Drag Camera · WASD Move · E Interact · B Emotes · V Photo · K Shop · G Garage'}
           </div>
         </div>
       </div>

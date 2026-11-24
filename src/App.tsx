@@ -6,6 +6,7 @@ import { EmoteWheelModal } from './components/EmoteWheelModal';
 import { GameHud } from './components/GameHud';
 import { GarageModal } from './components/GarageModal';
 import { PauseModal } from './components/PauseModal';
+import { PhotoModeOverlay } from './components/PhotoModeOverlay';
 import { PlayerQuizModal } from './components/PlayerQuizModal';
 import { RewardShop3DModal } from './components/RewardShop3DModal';
 import { SocialChallengeDrawer } from './components/SocialChallengeDrawer';
@@ -62,6 +63,8 @@ import type {
   HudSnapshot,
   InteriorElevatorFloor,
   OutfitId,
+  PhotoFilterId,
+  PhotoModeState,
   VehicleKind,
   VehicleUpgradeLevels,
 } from './game/types';
@@ -128,7 +131,7 @@ const INITIAL_SNAPSHOT: HudSnapshot = {
     muted: false,
     musicEnabled: true,
     timeOfDay: 'siang',
-    graphicsQuality: 'medium',
+    graphicsQuality: 'high',
   },
   activityToast: null,
   lastSavedAt: null,
@@ -150,7 +153,33 @@ type ActiveModalKind =
   | 'teacher'
   | 'shop'
   | 'emotes'
-  | 'social';
+  | 'social'
+  | 'photo';
+
+const INITIAL_PHOTO_STATE: PhotoModeState = {
+  active: false,
+  pose: 'photo_cool',
+  orbitYaw: 2.72,
+  orbitPitch: 0.14,
+  distance: 3.6,
+  fov: 54,
+  filter: 'natural',
+  hideUi: false,
+  panY: 0.12,
+};
+
+function getPhotoFilterCss(filter: PhotoFilterId): string | undefined {
+  switch (filter) {
+    case 'golden':
+      return 'sepia(0.28) saturate(1.24) contrast(1.06) brightness(1.04)';
+    case 'cinema':
+      return 'contrast(1.18) saturate(0.84) brightness(0.95)';
+    case 'vivid':
+      return 'saturate(1.38) contrast(1.08) brightness(1.03)';
+    default:
+      return undefined;
+  }
+}
 
 interface ElevatorPanelState {
   buildingName: string;
@@ -211,6 +240,8 @@ export default function App() {
   const [groups, setGroups] = useState<SocialGroupSnapshot[]>([]);
   const [challengeState, setChallengeState] = useState<ChallengeSessionState | null>(null);
   const [mutedPlayerIds, setMutedPlayerIds] = useState<string[]>([]);
+  const [photoState, setPhotoState] = useState<PhotoModeState>(INITIAL_PHOTO_STATE);
+  const [photoCapturedUrl, setPhotoCapturedUrl] = useState<string | null>(null);
   const mutedPlayerIdSet = useMemo(() => new Set(mutedPlayerIds), [mutedPlayerIds]);
   const lastSyncedBuildingRef = useRef<string | null>(null);
   const lastSyncedFloorRef = useRef<number>(1);
@@ -222,8 +253,18 @@ export default function App() {
     if (next !== 'elevator') {
       setElevatorPanelState(null);
     }
+    if (next !== 'photo') {
+      setPhotoCapturedUrl(null);
+    }
     setActiveModal(next);
-    engineRef.current?.setPreviewMode(next);
+    if (next === 'photo') {
+      const ok = engineRef.current?.enterPhotoMode();
+      if (!ok) {
+        setActiveModal('none');
+      }
+    } else {
+      engineRef.current?.setPreviewMode(next);
+    }
   }, []);
 
   // Initialize 3D Engine
@@ -264,6 +305,9 @@ export default function App() {
         },
         onTriggerSocialEmote: (targetPlayerId, emote) => {
           wsClientRef.current?.sendSocialEmote(targetPlayerId, emote);
+        },
+        onPhotoModeChange: (nextPhotoState) => {
+          setPhotoState(nextPhotoState);
         },
       },
       autostart,
@@ -470,11 +514,26 @@ export default function App() {
       ) {
         e.preventDefault();
         setModal(activeModal === 'emotes' ? 'none' : 'emotes');
+      } else if (
+        e.code === 'KeyV' &&
+        !e.repeat &&
+        (activeModal === 'none' || activeModal === 'photo')
+      ) {
+        e.preventDefault();
+        if (activeModal === 'photo') {
+          engineRef.current?.exitPhotoMode();
+          setModal('none');
+        } else {
+          setModal('photo');
+        }
+      } else if (e.code === 'KeyH' && !e.repeat && activeModal === 'photo') {
+        e.preventDefault();
+        engineRef.current?.updatePhotoModeState({ hideUi: !photoState.hideUi });
       }
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [phase, activeModal, setModal, openSecretTeacherAccess]);
+  }, [phase, activeModal, photoState.hideUi, setModal, openSecretTeacherAccess]);
 
   // Sync interior visits & CITY TOWER climb progress to authoritative player profile for badges/leaderboard
   useEffect(() => {
@@ -734,6 +793,27 @@ export default function App() {
     [setModal],
   );
 
+  const handleOpenPhotoMode = useCallback(() => {
+    setModal('photo');
+  }, [setModal]);
+
+  const handlePatchPhotoState = useCallback((patch: Partial<PhotoModeState>) => {
+    engineRef.current?.updatePhotoModeState(patch);
+  }, []);
+
+  const handleCapturePhoto = useCallback(() => {
+    const url = engineRef.current?.capturePhotoSnapshot() ?? null;
+    if (url) {
+      setPhotoCapturedUrl(url);
+    }
+  }, []);
+
+  const handleClosePhotoMode = useCallback(() => {
+    setPhotoCapturedUrl(null);
+    engineRef.current?.exitPhotoMode();
+    setModal('none');
+  }, [setModal]);
+
   const handleMobileMove = useCallback((x: number, y: number) => {
     engineRef.current?.setMobileMove(x, y);
   }, []);
@@ -981,6 +1061,11 @@ export default function App() {
         ref={canvasMountRef}
         data-testid="game-canvas-container"
         className="w-full h-full"
+        style={
+          activeModal === 'photo' && photoState.filter !== 'natural'
+            ? { filter: getPhotoFilterCss(photoState.filter) }
+            : undefined
+        }
       />
 
       {contextError && (
@@ -1019,6 +1104,7 @@ export default function App() {
           onPause={handlePause}
           onToggleMute={handleToggleMute}
           onCycleTimeOfDay={handleCycleTimeOfDay}
+          onOpenPhotoMode={handleOpenPhotoMode}
           onOpenGarage={() => setModal('garage')}
           onOpenCustomize={() => setModal('customize')}
           onOpenShop={() => setModal('shop')}
@@ -1034,6 +1120,17 @@ export default function App() {
           onMobileSprint={handleMobileSprint}
           onMobileJump={handleMobileJump}
           onMobileDrivingInput={handleMobileDrivingInput}
+        />
+      )}
+
+      {phase === 'playing' && activeModal === 'photo' && (
+        <PhotoModeOverlay
+          photoState={photoState}
+          capturedDataUrl={photoCapturedUrl}
+          onPatch={handlePatchPhotoState}
+          onCapture={handleCapturePhoto}
+          onClearCapture={() => setPhotoCapturedUrl(null)}
+          onClose={handleClosePhotoMode}
         />
       )}
 

@@ -824,6 +824,23 @@ export function buildInteriorScene(
         d.hingeZ - Math.sin(d.closedYaw) * d.width * 0.5 - 0.08,
       );
       fg.add(exitSign);
+    } else if (d.rooftopTarget) {
+      const roofSign = new THREE.Mesh(
+        tGeo(new THREE.BoxGeometry(0.75, 0.18, 0.08)),
+        tMat(
+          new THREE.MeshStandardMaterial({
+            color: 0x38bdf8,
+            emissive: 0x0ea5e9,
+            emissiveIntensity: 1.25,
+          }),
+        ),
+      );
+      roofSign.position.set(
+        d.hingeX + Math.cos(d.closedYaw) * d.width * 0.5,
+        d.y + d.height + 0.22,
+        d.hingeZ - Math.sin(d.closedYaw) * d.width * 0.5 + 0.08,
+      );
+      fg.add(roofSign);
     }
 
     fg.add(pivot);

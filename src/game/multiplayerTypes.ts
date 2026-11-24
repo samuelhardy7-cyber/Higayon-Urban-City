@@ -52,6 +52,9 @@ export interface RemotePlayerState {
   grounded?: boolean;
   onStairs?: boolean;
   onSeat?: boolean;
+  climbingLadder?: boolean;
+  turnDeltaYaw?: number;
+  photoPose?: string | null;
   vehicleKind: VehicleKind | null;
   currentBuilding: string | null;
   currentFloor: number;
@@ -216,6 +219,9 @@ export type ClientWsMessage =
       grounded?: boolean;
       onStairs?: boolean;
       onSeat?: boolean;
+      climbingLadder?: boolean;
+      turnDeltaYaw?: number;
+      photoPose?: string | null;
       vehicleKind: VehicleKind | null;
       currentBuilding: string | null;
       currentFloor: number;

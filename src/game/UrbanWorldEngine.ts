@@ -96,6 +96,7 @@ import {
 import { createInteriorBlueprintForEntrance } from './interiorData';
 import {
   createInteriorDoorStates,
+  findInteriorRooftopEntrySpawn,
   findNearestExteriorEntrance,
   findNearestInteriorInteractable,
   findNearestSittableProp,
@@ -107,6 +108,19 @@ import {
   type FloorCeilingInfo,
   type SittableSpot,
 } from './interiorSystem';
+import {
+  findNearestExteriorLadder,
+  findNearestRooftopInteriorDoor,
+  findRooftopAt,
+  stepLadderClimb,
+} from './rooftopSystem';
+import {
+  buildSkyLifeVisuals,
+  createSkyLifeState,
+  stepSkyLifeState,
+  type SkyLifeState,
+  type SkyLifeSystemRig,
+} from './skyLifeSystem';
 import {
   toPlayerQuestion,
   toPublicQuestionDatabase,
@@ -135,6 +149,7 @@ import type {
   BuildingEntranceSpec,
   CharacterCustomization,
   DrivingInputState,
+  ExteriorLadderSpec,
   GamePhase,
   GameSettings,
   GraphicsQuality,
@@ -145,9 +160,11 @@ import type {
   InteriorElevatorFloor,
   NpcState,
   OutfitId,
+  PhotoModeState,
   PlayerControlMode,
   PlayerState,
   ProgressionState,
+  RooftopSpec,
   SaveGameData,
   TimeOfDayPhase,
   VehicleKind,
@@ -214,6 +231,7 @@ export interface EngineCallbacks {
   }) => void;
   onOpenRewardShop?: () => void;
   onTriggerSocialEmote?: (targetPlayerId: string, emote: EmoteKind) => void;
+  onPhotoModeChange?: (state: PhotoModeState) => void;
 }
 
 const _tmpColor = new THREE.Color();
@@ -270,8 +288,16 @@ export class UrbanWorldEngine {
     timer: number;
     swapped: boolean;
     entrance?: BuildingEntranceSpec;
+    targetFloor?: number;
+    rooftopTarget?: { x: number; y: number; z: number; yaw: number };
   } | null = null;
   private transitionFade = 0;
+
+  private activeLadder: ExteriorLadderSpec | null = null;
+  private lastLadderClimbSpeed = 0;
+  private activeRooftop: RooftopSpec | null = null;
+  private skyLifeState!: SkyLifeState;
+  private skyLifeRig!: SkyLifeSystemRig;
 
   private playerState: PlayerState;
   private playerRig: ReturnType<typeof createCharacterRig>;
@@ -279,6 +305,7 @@ export class UrbanWorldEngine {
   private activeSitSpot: SittableSpot | null = null;
   private prevPlayerYaw = 0;
   private prevPlayerY = 0;
+  private prevTurnDeltaYaw = 0;
   private prevOnStairs = false;
   private explorationTracker: ExplorationTrackerState = createInitialExplorationTracker();
   private npcs: NpcState[];
@@ -312,7 +339,19 @@ export class UrbanWorldEngine {
     | 'elevator'
     | 'shop'
     | 'emotes'
-    | 'social' = 'none';
+    | 'social'
+    | 'photo' = 'none';
+  private photoState: PhotoModeState = {
+    active: false,
+    pose: 'photo_cool',
+    orbitYaw: 2.72,
+    orbitPitch: 0.14,
+    distance: 3.6,
+    fov: 54,
+    filter: 'natural',
+    hideUi: false,
+    panY: 0.12,
+  };
   private activityToast: string | null = null;
   private activityToastTimer = 0;
   private lastSavedAt: number | null = null;
@@ -443,7 +482,14 @@ export class UrbanWorldEngine {
     this.builtCity = buildCityScene(CITY_LAYOUT, textures, !this.isSoftwareGl);
     this.scene.add(this.builtCity.group);
 
-    this.playerRig = createCharacterRig(textures.contactShadowMap, !this.isSoftwareGl);
+    this.skyLifeState = createSkyLifeState();
+    this.skyLifeRig = buildSkyLifeVisuals(this.skyLifeState);
+    this.scene.add(this.skyLifeRig.group);
+
+    this.playerRig = createCharacterRig(textures.contactShadowMap, !this.isSoftwareGl, {
+      fabricBumpMap: textures.fabricBumpMap,
+      leatherBumpMap: textures.leatherBumpMap,
+    });
     applyCharacterCustomization(this.playerRig, this.progression.customization);
     this.scene.add(this.playerRig.root);
 
@@ -562,6 +608,7 @@ export class UrbanWorldEngine {
       this.disposeKioskRigs(this.outdoorKioskRigs);
       textures.dispose();
       this.builtCity.dispose();
+      this.skyLifeRig.dispose();
       this.playerRig.dispose();
       this.npcRigs.forEach((nr) => nr.dispose());
       this.vehicleRigs.forEach((vr) => vr.dispose());
@@ -755,6 +802,7 @@ export class UrbanWorldEngine {
       return;
     }
     const dpr = window.devicePixelRatio || 1;
+    const prevShadowSize = this.sunLight.shadow.mapSize.width;
     if (quality === 'low') {
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
@@ -763,10 +811,16 @@ export class UrbanWorldEngine {
       this.renderer.setPixelRatio(Math.min(dpr, 1.5));
       this.renderer.shadowMap.enabled = true;
       this.sunLight.castShadow = true;
+      this.sunLight.shadow.mapSize.set(1024, 1024);
     } else {
       this.renderer.setPixelRatio(Math.min(dpr, 2));
       this.renderer.shadowMap.enabled = true;
       this.sunLight.castShadow = true;
+      this.sunLight.shadow.mapSize.set(2048, 2048);
+    }
+    if (this.sunLight.shadow.map && prevShadowSize !== this.sunLight.shadow.mapSize.width) {
+      this.sunLight.shadow.map.dispose();
+      this.sunLight.shadow.map = null;
     }
   }
 
@@ -1231,7 +1285,10 @@ export class UrbanWorldEngine {
       return;
     }
 
-    const rig = createCharacterRig(this.contactShadowTex, false);
+    const rig = createCharacterRig(this.contactShadowTex, false, {
+      fabricBumpMap: this.textures.fabricBumpMap,
+      leatherBumpMap: this.textures.leatherBumpMap,
+    });
     applyCharacterCustomization(rig, remote.avatar);
     const nameplate = createPlayerNameplateRig(
       remote.displayName,
@@ -1306,6 +1363,9 @@ export class UrbanWorldEngine {
       grounded: this.playerState.grounded,
       onStairs: this.prevOnStairs,
       onSeat: Boolean(this.activeSitSpot),
+      climbingLadder: Boolean(this.activeLadder),
+      turnDeltaYaw: Math.round(this.prevTurnDeltaYaw * 100) / 100,
+      photoPose: this.previewMode === 'photo' ? this.photoState.pose : null,
       vehicleKind: activeVehicle ? activeVehicle.kind : null,
       currentBuilding: this.activeBlueprint ? this.activeBlueprint.buildingId : null,
       currentFloor: this.activeBlueprint ? this.currentInteriorFloor : 1,
@@ -1362,8 +1422,12 @@ export class UrbanWorldEngine {
           isMotorcycle: t.vehicleKind === 'motor',
           onStairs: entry.state.onStairs,
           stairDirection: t.animState === 'descend_stairs' ? 'down' : t.animState === 'climb_stairs' ? 'up' : 'none',
+          climbingLadder: entry.state.climbingLadder || t.animState === 'climb_ladder',
+          climbSpeed: entry.state.speed,
+          turnDeltaYaw: entry.state.turnDeltaYaw,
+          photoPose: (entry.state.photoPose as PhotoModeState['pose'] | null) ?? null,
           backward: t.animState === 'walk_backward',
-          sitting: entry.state.onSeat || t.animState === 'sit',
+          sitting: entry.state.onSeat || t.animState === 'sit' || entry.state.photoPose === 'sit',
           elapsedTime: elapsed,
         },
         dt,
@@ -1406,6 +1470,69 @@ export class UrbanWorldEngine {
     this.callbacks.onOpenQuiz?.(challenge);
   }
 
+  public getPhotoModeState(): PhotoModeState {
+    return { ...this.photoState };
+  }
+
+  public enterPhotoMode(): boolean {
+    if (this.phase !== 'playing' || this.playerMode !== 'on_foot' || this.activeLadder || this.buildingTransition) {
+      return false;
+    }
+    this.photoState = {
+      ...this.photoState,
+      active: true,
+      orbitYaw: this.playerState.yaw + Math.PI - 0.42,
+      orbitPitch: 0.14,
+    };
+    this.callbacks.onPhotoModeChange?.({ ...this.photoState });
+    this.setPreviewMode('photo');
+    this.audio.playUiClick();
+    return true;
+  }
+
+  public exitPhotoMode(): void {
+    if (!this.photoState.active && this.previewMode !== 'photo') return;
+    this.photoState = { ...this.photoState, active: false };
+    this.camera.fov = this.activeBlueprint ? 72 : 62;
+    this.camera.updateProjectionMatrix();
+    this.callbacks.onPhotoModeChange?.({ ...this.photoState });
+    this.setPreviewMode('none');
+    this.audio.playUiClick();
+  }
+
+  public updatePhotoModeState(patch: Partial<PhotoModeState>): void {
+    this.photoState = { ...this.photoState, ...patch };
+    if (patch.fov !== undefined && this.previewMode === 'photo') {
+      this.camera.fov = this.photoState.fov;
+      this.camera.updateProjectionMatrix();
+    }
+    this.callbacks.onPhotoModeChange?.({ ...this.photoState });
+  }
+
+  public capturePhotoSnapshot(): string | null {
+    this.audio.playCheckpoint();
+    this.updatePhotoModeCamera(0.05);
+    this.renderer.render(this.scene, this.camera);
+    const glCanvas = this.renderer.domElement;
+    if (this.photoState.filter === 'natural') {
+      return glCanvas.toDataURL('image/png');
+    }
+    const offscreen = document.createElement('canvas');
+    offscreen.width = glCanvas.width;
+    offscreen.height = glCanvas.height;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return glCanvas.toDataURL('image/png');
+    const filterCss =
+      this.photoState.filter === 'golden'
+        ? 'sepia(0.28) saturate(1.24) contrast(1.06) brightness(1.04)'
+        : this.photoState.filter === 'cinema'
+          ? 'contrast(1.18) saturate(0.84) brightness(0.95)'
+          : 'saturate(1.38) contrast(1.08) brightness(1.03)';
+    ctx.filter = filterCss;
+    ctx.drawImage(glCanvas, 0, 0);
+    return offscreen.toDataURL('image/png');
+  }
+
   public setPreviewMode(
     mode:
       | 'none'
@@ -1418,9 +1545,14 @@ export class UrbanWorldEngine {
       | 'elevator'
       | 'shop'
       | 'emotes'
-      | 'social',
+      | 'social'
+      | 'photo',
   ): void {
     this.previewMode = mode;
+    if (mode !== 'photo' && this.photoState.active) {
+      this.photoState = { ...this.photoState, active: false };
+      this.callbacks.onPhotoModeChange?.({ ...this.photoState });
+    }
     if (mode !== 'none') {
       this.clearHeldInputs();
       if (document.pointerLockElement === this.renderer.domElement) {
@@ -1430,6 +1562,12 @@ export class UrbanWorldEngine {
         this.playerRig.root.visible = true;
         this.snapCustomizePreviewCamera();
         this.renderer.render(this.scene, this.camera);
+      } else if (mode === 'photo') {
+        this.playerRig.root.visible = true;
+        this.camera.fov = this.photoState.fov;
+        this.camera.updateProjectionMatrix();
+        this.updatePhotoModeCamera(0.2);
+        this.renderer.render(this.scene, this.camera);
       }
     } else if (this.playerMode === 'driving') {
       const activeV = this.getActiveVehicle();
@@ -1437,6 +1575,8 @@ export class UrbanWorldEngine {
         this.playerRig.root.visible = false;
       }
     } else {
+      this.camera.fov = this.activeBlueprint ? 72 : 62;
+      this.camera.updateProjectionMatrix();
       this.camInitialized = false;
       if (this.activeBlueprint) {
         this.snapInteriorCamera();
@@ -1461,12 +1601,15 @@ export class UrbanWorldEngine {
     this.activeInteriorDoors = [];
     this.activeElevatorState = null;
     this.activeSitSpot = null;
+    this.activeLadder = null;
+    this.activeRooftop = null;
     this.currentInteriorFloor = 1;
     this.prevInteriorFloor = 1;
     this.outdoorReturnState = null;
     this.buildingTransition = null;
     this.transitionFade = 0;
     this.builtCity.group.visible = true;
+    this.skyLifeRig.group.visible = true;
     this.outdoorKioskRigs.forEach((kr) => {
       kr.group.visible = true;
     });
@@ -1933,6 +2076,23 @@ export class UrbanWorldEngine {
         return;
       }
 
+      if (nearInt.kind === 'rooftop_exit') {
+        this.activeSitSpot = null;
+        const door = this.activeInteriorDoors.find((d) => d.id === nearInt.id);
+        if (door) door.isOpen = true;
+        triggerCharacterAction(this.playerAnimRuntime, 'open_door', 0.85, false);
+        this.clearHeldInputs();
+        this.audio.playDoorLatch(true);
+        this.buildingTransition = {
+          kind: 'exit',
+          timer: 0,
+          swapped: false,
+          rooftopTarget: door?.rooftopTarget,
+        };
+        this.pushHudSnapshot(true);
+        return;
+      }
+
       if (nearInt.kind === 'interior_door') {
         const door = this.activeInteriorDoors.find((d) => d.id === nearInt.id);
         if (door) {
@@ -2047,6 +2207,41 @@ export class UrbanWorldEngine {
 
     if (this.playerMode !== 'on_foot') return;
 
+    // Dismount exterior ladder if currently climbing
+    if (this.activeLadder) {
+      const l = this.activeLadder;
+      this.activeLadder = null;
+      this.playerState.activeLadderId = null;
+      this.playerState.vx = 0;
+      this.playerState.vz = 0;
+      if (this.playerState.y >= l.topY - 1.4) {
+        this.playerState.x = l.topStepX;
+        this.playerState.y = l.topY;
+        this.playerState.z = l.topStepZ;
+        this.playerState.vy = 0;
+        this.playerState.grounded = true;
+      } else {
+        this.playerState.x = l.x + l.normalX * 1.1;
+        this.playerState.z = l.z + l.normalZ * 1.1;
+        this.playerState.grounded = false;
+      }
+      this.audio.playDoorLatch(false);
+      this.pushHudSnapshot(true);
+      return;
+    }
+
+    const nearRooftopDoor = findNearestRooftopInteriorDoor(
+      this.playerState.x,
+      this.playerState.y,
+      this.playerState.z,
+      CITY_LAYOUT,
+    );
+    const nearLadder = findNearestExteriorLadder(
+      this.playerState.x,
+      this.playerState.y,
+      this.playerState.z,
+      CITY_LAYOUT,
+    );
     const nearEntrance = findNearestExteriorEntrance(
       this.playerState.x,
       this.playerState.z,
@@ -2069,20 +2264,29 @@ export class UrbanWorldEngine {
       this.outdoorKiosks,
     );
 
-    const candidates: Array<{ kind: 'entrance' | 'vehicle' | 'mission' | 'quiz'; dist: number }> = [];
-    if (nearEntrance) {
+    const candidates: Array<{
+      kind: 'rooftop_enter' | 'climb_ladder' | 'entrance' | 'vehicle' | 'mission' | 'quiz';
+      dist: number;
+    }> = [];
+    if (nearRooftopDoor) {
+      candidates.push({ kind: 'rooftop_enter', dist: nearRooftopDoor.distance });
+    }
+    if (nearLadder) {
+      candidates.push({ kind: 'climb_ladder', dist: nearLadder.distance });
+    }
+    if (nearEntrance && Math.abs(this.playerState.y - CITY_LAYOUT.sidewalkHeight) < 2.2) {
       candidates.push({
         kind: 'entrance',
         dist: Math.hypot(nearEntrance.doorX - this.playerState.x, nearEntrance.doorZ - this.playerState.z),
       });
     }
-    if (nearVehicle) {
+    if (nearVehicle && Math.abs(this.playerState.y - nearVehicle.y) < 2.2) {
       candidates.push({
         kind: 'vehicle',
         dist: Math.hypot(nearVehicle.x - this.playerState.x, nearVehicle.z - this.playerState.z),
       });
     }
-    if (nearMission) {
+    if (nearMission && Math.abs(this.playerState.y - CITY_LAYOUT.sidewalkHeight) < 2.2) {
       candidates.push({
         kind: 'mission',
         dist: Math.hypot(nearMission.startX - this.playerState.x, nearMission.startZ - this.playerState.z),
@@ -2097,7 +2301,32 @@ export class UrbanWorldEngine {
     candidates.sort((a, b) => a.dist - b.dist);
 
     const chosen = candidates[0]?.kind;
-    if (chosen === 'entrance' && nearEntrance) {
+    if (chosen === 'rooftop_enter' && nearRooftopDoor) {
+      const targetEntrance = CITY_LAYOUT.entrances.find(
+        (e) => e.buildingId === nearRooftopDoor.rooftop.buildingId,
+      );
+      if (targetEntrance) {
+        this.beginEnterBuilding(targetEntrance, nearRooftopDoor.targetFloor);
+      }
+    } else if (chosen === 'climb_ladder' && nearLadder) {
+      this.activeSitSpot = null;
+      this.activeLadder = nearLadder.ladder;
+      this.playerState.activeLadderId = nearLadder.ladder.id;
+      this.playerState.x = nearLadder.ladder.x + nearLadder.ladder.normalX * 0.56;
+      this.playerState.z = nearLadder.ladder.z + nearLadder.ladder.normalZ * 0.56;
+      this.playerState.y =
+        nearLadder.entryEnd === 'top'
+          ? nearLadder.ladder.topY - 0.35
+          : nearLadder.ladder.bottomY + 0.15;
+      this.playerState.yaw = nearLadder.ladder.climbYaw;
+      this.playerState.vx = 0;
+      this.playerState.vy = 0;
+      this.playerState.vz = 0;
+      this.playerState.grounded = false;
+      this.audio.playUiClick();
+      this.showActivityToast('Climbing ladder (W/S to climb · Space/E to let go)');
+      this.pushHudSnapshot(true);
+    } else if (chosen === 'entrance' && nearEntrance) {
       this.beginEnterBuilding(nearEntrance);
     } else if (chosen === 'vehicle' && nearVehicle) {
       this.enterVehicle(nearVehicle);
@@ -2108,8 +2337,10 @@ export class UrbanWorldEngine {
     }
   }
 
-  private beginEnterBuilding(entrance: BuildingEntranceSpec): void {
+  private beginEnterBuilding(entrance: BuildingEntranceSpec, targetFloor?: number): void {
     this.clearHeldInputs();
+    this.activeLadder = null;
+    this.playerState.activeLadderId = null;
     this.outdoorReturnState = {
       x: this.playerState.x,
       y: this.playerState.y,
@@ -2128,11 +2359,12 @@ export class UrbanWorldEngine {
       timer: 0,
       swapped: false,
       entrance,
+      targetFloor,
     };
     this.pushHudSnapshot(true);
   }
 
-  private swapToInterior(entrance: BuildingEntranceSpec): void {
+  private swapToInterior(entrance: BuildingEntranceSpec, targetFloor?: number): void {
     if (this.activeBuiltInterior) {
       this.scene.remove(this.activeBuiltInterior.group);
       this.activeBuiltInterior.dispose();
@@ -2140,8 +2372,9 @@ export class UrbanWorldEngine {
     const blueprint = createInteriorBlueprintForEntrance(entrance);
     const doors = createInteriorDoorStates(blueprint);
     const built = buildInteriorScene(blueprint, this.textures, !this.isSoftwareGl);
+    const startFloor = targetFloor ?? 1;
     const elevState =
-      blueprint.elevators.length > 0 ? createElevatorRuntimeState(blueprint.elevators[0], 1) : null;
+      blueprint.elevators.length > 0 ? createElevatorRuntimeState(blueprint.elevators[0], startFloor) : null;
 
     this.activeEntrance = entrance;
     this.activeBlueprint = blueprint;
@@ -2149,16 +2382,18 @@ export class UrbanWorldEngine {
     this.activeElevatorState = elevState;
     this.activeBuiltInterior = built;
     this.activeSitSpot = null;
-    this.currentInteriorFloor = 1;
-    this.prevInteriorFloor = 1;
-    built.syncVisibleFloorWindow(1);
+    this.activeRooftop = null;
+    this.currentInteriorFloor = startFloor;
+    this.prevInteriorFloor = startFloor;
+    built.syncVisibleFloorWindow(startFloor);
     built.syncElevator(elevState);
-    if (recordVisitedBuilding(this.explorationTracker, entrance.buildingId, 1)) {
+    if (recordVisitedBuilding(this.explorationTracker, entrance.buildingId, startFloor)) {
       this.showActivityToast(`Discovered ${entrance.name}!`);
     }
 
     // Hide exterior city & world entities
     this.builtCity.group.visible = false;
+    this.skyLifeRig.group.visible = false;
     this.outdoorKioskRigs.forEach((kr) => {
       kr.group.visible = false;
     });
@@ -2188,14 +2423,19 @@ export class UrbanWorldEngine {
     this.scene.environmentIntensity = 0.55;
     this.renderer.toneMappingExposure = 1.12;
 
-    this.playerState.x = blueprint.spawn.x;
-    this.playerState.y = blueprint.spawn.y;
-    this.playerState.z = blueprint.spawn.z;
+    const spawnPos =
+      targetFloor && targetFloor > 1
+        ? findInteriorRooftopEntrySpawn(blueprint, targetFloor)
+        : blueprint.spawn;
+
+    this.playerState.x = spawnPos.x;
+    this.playerState.y = spawnPos.y;
+    this.playerState.z = spawnPos.z;
     this.playerState.vx = 0;
     this.playerState.vy = 0;
     this.playerState.vz = 0;
-    this.playerState.yaw = blueprint.spawn.yaw;
-    this.playerState.cameraYaw = blueprint.spawn.yaw;
+    this.playerState.yaw = spawnPos.yaw;
+    this.playerState.cameraYaw = spawnPos.yaw;
     this.playerState.cameraPitch = 0.22;
     this.playerState.grounded = true;
     this.playerState.speed = 0;
@@ -2209,7 +2449,7 @@ export class UrbanWorldEngine {
       this.playerState.y,
       this.playerState.z,
       this.playerState.yaw,
-      blueprint.spawn.y,
+      spawnPos.y,
       this.playerState.squashY,
     );
     this.camInitialized = false;
@@ -2218,7 +2458,7 @@ export class UrbanWorldEngine {
     this.renderer.render(this.scene, this.camera);
   }
 
-  private exitInteriorToCity(): void {
+  private exitInteriorToCity(rooftopTarget?: { x: number; y: number; z: number; yaw: number }): void {
     const entrance = this.activeEntrance;
     const savedReturn = this.outdoorReturnState;
 
@@ -2240,6 +2480,7 @@ export class UrbanWorldEngine {
     this.outdoorReturnState = null;
 
     this.builtCity.group.visible = true;
+    this.skyLifeRig.group.visible = true;
     this.outdoorKioskRigs.forEach((kr) => {
       kr.group.visible = true;
     });
@@ -2249,7 +2490,23 @@ export class UrbanWorldEngine {
     });
     this.applyTimeOfDayImmediate(this.timeOfDay);
 
-    if (entrance) {
+    if (rooftopTarget) {
+      this.playerState.x = rooftopTarget.x;
+      this.playerState.y = rooftopTarget.y;
+      this.playerState.z = rooftopTarget.z;
+      this.playerState.yaw = rooftopTarget.yaw;
+      this.playerState.cameraYaw = rooftopTarget.yaw;
+      this.playerState.cameraPitch = 0.24;
+      this.activeRooftop = findRooftopAt(
+        rooftopTarget.x,
+        rooftopTarget.y,
+        rooftopTarget.z,
+        CITY_LAYOUT,
+      );
+      if (this.activeRooftop) {
+        this.showActivityToast(`Stepped out onto ${this.activeRooftop.name}!`);
+      }
+    } else if (entrance) {
       const safeOut = findSafeOutdoorExitPos(entrance, CITY_LAYOUT);
       this.playerState.x = safeOut.x;
       this.playerState.y = safeOut.y;
@@ -2275,7 +2532,7 @@ export class UrbanWorldEngine {
     this.playerRig.root.visible = true;
 
     delete document.body.dataset.interior;
-    const gy = getGroundHeightAt(this.playerState.x, this.playerState.z, CITY_LAYOUT);
+    const gy = getGroundHeightAt(this.playerState.x, this.playerState.z, CITY_LAYOUT, this.playerState.y);
     animateCharacterRig(this.playerRig, this.playerState, gy, this.playerState.elapsedTime);
     this.camera.fov = 62;
     this.camera.updateProjectionMatrix();
@@ -2635,6 +2892,71 @@ export class UrbanWorldEngine {
     this.camera.lookAt(this.camTarget);
   }
 
+  private updatePhotoModeCamera(dt: number): void {
+    const dist = this.photoState.distance;
+    const pitch = this.photoState.orbitPitch;
+    const yaw = this.photoState.orbitYaw;
+    const horizDist = dist * Math.cos(pitch);
+    const originX = this.playerState.x;
+    const originY = this.playerState.y + 1.18 + this.photoState.panY;
+    const originZ = this.playerState.z;
+
+    const desiredX = originX + Math.sin(yaw) * horizDist;
+    const desiredY = originY + dist * Math.sin(pitch);
+    const desiredZ = originZ + Math.cos(yaw) * horizDist;
+
+    let safeX = desiredX;
+    let safeY = desiredY;
+    let safeZ = desiredZ;
+    if (this.activeBlueprint) {
+      const floorInfo = getInteriorFloorAndCeilingAt(
+        this.playerState.x,
+        this.playerState.y,
+        this.playerState.z,
+        this.activeBlueprint,
+        this.activeElevatorState,
+      );
+      const hit = raycastInteriorCamera(
+        originX,
+        originY,
+        originZ,
+        desiredX,
+        desiredY,
+        desiredZ,
+        this.activeBlueprint,
+        floorInfo,
+      );
+      safeX = hit.x;
+      safeY = hit.y;
+      safeZ = hit.z;
+    } else {
+      const hit = raycastCameraCollision(
+        originX,
+        originY,
+        originZ,
+        desiredX,
+        desiredY,
+        desiredZ,
+        CITY_LAYOUT.colliders,
+      );
+      safeX = hit.x;
+      safeY = Math.max(getGroundHeightAt(hit.x, hit.z, CITY_LAYOUT, this.playerState.y) + 0.25, hit.y);
+      safeZ = hit.z;
+    }
+
+    const lambda = Math.max(12, 22);
+    this.camPos.x = dampValue(this.camPos.x, safeX, lambda, dt);
+    this.camPos.y = dampValue(this.camPos.y, safeY, lambda, dt);
+    this.camPos.z = dampValue(this.camPos.z, safeZ, lambda, dt);
+    this.camTarget.set(originX, originY, originZ);
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camTarget);
+    if (Math.abs(this.camera.fov - this.photoState.fov) > 0.05) {
+      this.camera.fov = dampValue(this.camera.fov, this.photoState.fov, 14, dt);
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
   private spawnImpactParticles(x: number, y: number, z: number, count: number): void {
     let spawned = 0;
     for (let i = 0; i < this.particlePool.length && spawned < count; i++) {
@@ -2780,66 +3102,102 @@ export class UrbanWorldEngine {
         }
       }
     } else if (this.playerMode === 'on_foot' && !this.buildingTransition) {
-      const nearEntrance = findNearestExteriorEntrance(
-        this.playerState.x,
-        this.playerState.z,
-        CITY_LAYOUT.entrances,
-      );
-      const nearMission = findNearestMissionStart(
-        this.playerState.x,
-        this.playerState.z,
-        this.missionRuntime,
-      );
-      const nearVehicle = findNearestInteractableVehicle(
-        this.playerState.x,
-        this.playerState.z,
-        this.vehicles,
-      );
-      const nearKiosk = findNearestQuizKiosk(
-        this.playerState.x,
-        this.playerState.y,
-        this.playerState.z,
-        this.outdoorKiosks,
-      );
+      if (this.activeLadder) {
+        interactPrompt = {
+          kind: 'climb_ladder',
+          label: 'Let Go of Ladder (E / Space)',
+        };
+      } else {
+        const nearRoofDoor = findNearestRooftopInteriorDoor(
+          this.playerState.x,
+          this.playerState.y,
+          this.playerState.z,
+          CITY_LAYOUT,
+        );
+        const nearLadder = findNearestExteriorLadder(
+          this.playerState.x,
+          this.playerState.y,
+          this.playerState.z,
+          CITY_LAYOUT,
+        );
+        const nearEntrance = findNearestExteriorEntrance(
+          this.playerState.x,
+          this.playerState.z,
+          CITY_LAYOUT.entrances,
+        );
+        const nearMission = findNearestMissionStart(
+          this.playerState.x,
+          this.playerState.z,
+          this.missionRuntime,
+        );
+        const nearVehicle = findNearestInteractableVehicle(
+          this.playerState.x,
+          this.playerState.z,
+          this.vehicles,
+        );
+        const nearKiosk = findNearestQuizKiosk(
+          this.playerState.x,
+          this.playerState.y,
+          this.playerState.z,
+          this.outdoorKiosks,
+        );
 
-      const prompts: Array<{
-        kind: NonNullable<HudSnapshot['interactPrompt']>['kind'];
-        label: string;
-        dist: number;
-      }> = [];
-      if (nearEntrance) {
-        prompts.push({
-          kind: 'building_enter',
-          label: `Enter ${nearEntrance.name}`,
-          dist: Math.hypot(nearEntrance.doorX - this.playerState.x, nearEntrance.doorZ - this.playerState.z),
-        });
-      }
-      if (nearMission) {
-        prompts.push({
-          kind: 'mission',
-          label: `Start ${nearMission.title}`,
-          dist: Math.hypot(nearMission.startX - this.playerState.x, nearMission.startZ - this.playerState.z),
-        });
-      }
-      if (nearVehicle) {
-        prompts.push({
-          kind: 'vehicle',
-          label: `Drive ${nearVehicle.label}`,
-          dist: Math.hypot(nearVehicle.x - this.playerState.x, nearVehicle.z - this.playerState.z),
-        });
-      }
-      if (nearKiosk) {
-        prompts.push({
-          kind: 'quiz_kiosk',
-          label: nearKiosk.allCompleted
-            ? `Review ${nearKiosk.nextSubjectName} Quiz`
-            : `Answer ${nearKiosk.nextSubjectName} Quiz (${nearKiosk.remainingCount} left)`,
-          dist: Math.hypot(nearKiosk.x - this.playerState.x, nearKiosk.z - this.playerState.z),
-        });
-      }
-      prompts.sort((a, b) => a.dist - b.dist);
-      if (prompts.length > 0) {
-        interactPrompt = { kind: prompts[0].kind, label: prompts[0].label };
+        const prompts: Array<{
+          kind: NonNullable<HudSnapshot['interactPrompt']>['kind'];
+          label: string;
+          dist: number;
+        }> = [];
+        if (nearRoofDoor) {
+          prompts.push({
+            kind: 'rooftop_enter',
+            label: `Enter ${nearRoofDoor.rooftop.name} (Floor ${nearRoofDoor.targetFloor})`,
+            dist: nearRoofDoor.distance,
+          });
+        }
+        if (nearLadder) {
+          prompts.push({
+            kind: 'climb_ladder',
+            label:
+              nearLadder.entryEnd === 'top'
+                ? `Climb Down ${nearLadder.ladder.label}`
+                : `Climb ${nearLadder.ladder.label}`,
+            dist: nearLadder.distance,
+          });
+        }
+        if (nearEntrance && Math.abs(this.playerState.y - CITY_LAYOUT.sidewalkHeight) < 2.2) {
+          prompts.push({
+            kind: 'building_enter',
+            label: `Enter ${nearEntrance.name}`,
+            dist: Math.hypot(nearEntrance.doorX - this.playerState.x, nearEntrance.doorZ - this.playerState.z),
+          });
+        }
+        if (nearMission && Math.abs(this.playerState.y - CITY_LAYOUT.sidewalkHeight) < 2.2) {
+          prompts.push({
+            kind: 'mission',
+            label: `Start ${nearMission.title}`,
+            dist: Math.hypot(nearMission.startX - this.playerState.x, nearMission.startZ - this.playerState.z),
+          });
+        }
+        if (nearVehicle && Math.abs(this.playerState.y - nearVehicle.y) < 2.2) {
+          prompts.push({
+            kind: 'vehicle',
+            label: `Drive ${nearVehicle.label}`,
+            dist: Math.hypot(nearVehicle.x - this.playerState.x, nearVehicle.z - this.playerState.z),
+          });
+        }
+        if (nearKiosk) {
+          prompts.push({
+            kind: 'quiz_kiosk',
+            label: nearKiosk.allCompleted
+              ? `Review ${nearKiosk.nextSubjectName} Quiz`
+              : `Answer ${nearKiosk.nextSubjectName} Quiz (${nearKiosk.remainingCount} left)`,
+            dist: Math.hypot(nearKiosk.x - this.playerState.x, nearKiosk.z - this.playerState.z),
+          });
+        }
+        prompts.sort((a, b) => a.dist - b.dist);
+        if (prompts.length > 0) {
+          interactPrompt = { kind: prompts[0].kind, label: prompts[0].label };
+        }
       }
     } else if (this.playerMode === 'driving') {
       const nearMission = findNearestMissionStart(
@@ -2935,6 +3293,9 @@ export class UrbanWorldEngine {
       currentVehicleKind: activeVehicle ? activeVehicle.kind : null,
       currentVehicleLabel: activeVehicle ? activeVehicle.label : null,
       interactPrompt,
+      activeRooftopName: this.activeRooftop ? this.activeRooftop.name : null,
+      isClimbingLadder: Boolean(this.activeLadder),
+      photoModeActive: this.previewMode === 'photo',
       activeMission: activeMissionSnap,
       missionBanner: this.missionRuntime.missionBanner
         ? {
@@ -3334,6 +3695,9 @@ export class UrbanWorldEngine {
         this.titleElapsed += dt;
         this.worldElapsed += dt;
         this.updateTitleCamera(this.titleElapsed);
+        stepSkyLifeState(this.skyLifeState, dt);
+        this.skyLifeRig.update(this.skyLifeState);
+        this.builtCity.updateEnvironment(this.worldElapsed);
         stepNpcs(this.npcs, dt, 999, 999, CITY_LAYOUT);
         stepTrafficAndPolice(this.vehicles, dt, this.worldElapsed, 0, 999, 999, false, CITY_LAYOUT);
         resolveVehiclesPairwise(this.vehicles);
@@ -3344,6 +3708,76 @@ export class UrbanWorldEngine {
           animateVehicleRig(this.vehicleRigs[i], this.vehicles[i], 0, isNightOrDusk);
         }
         animateCharacterRig(this.playerRig, this.playerState, 0, this.titleElapsed);
+      } else if (this.phase === 'playing' && this.previewMode === 'photo') {
+        // Photo Mode: Freeze local character in chosen pose while keeping the 3D city, sky life, boats, traffic & NPCs alive!
+        this.worldElapsed += dt;
+        stepSkyLifeState(this.skyLifeState, dt);
+        this.skyLifeRig.update(this.skyLifeState);
+        this.builtCity.updateEnvironment(this.worldElapsed);
+        this.audio.updateEngineSound(false, 0, 1);
+
+        if (!this.activeBlueprint) {
+          stepNpcs(this.npcs, dt, this.playerState.x, this.playerState.z, CITY_LAYOUT);
+          stepTrafficAndPolice(
+            this.vehicles,
+            dt,
+            this.worldElapsed,
+            0,
+            this.playerState.x,
+            this.playerState.z,
+            false,
+            CITY_LAYOUT,
+          );
+          resolveVehiclesPairwise(this.vehicles);
+          for (let i = 0; i < this.npcs.length; i++) {
+            const npc = this.npcs[i];
+            const rig = this.npcRigs[i];
+            const visible =
+              Math.hypot(npc.x - this.playerState.x, npc.z - this.playerState.z) <= 135;
+            rig.root.visible = visible;
+            if (visible) animateNpcRig(rig, npc, this.worldElapsed);
+          }
+          for (let i = 0; i < this.vehicles.length; i++) {
+            const v = this.vehicles[i];
+            const rig = this.vehicleRigs[i];
+            const visible =
+              Math.hypot(v.x - this.playerState.x, v.z - this.playerState.z) <= 185;
+            rig.root.visible = visible;
+            if (visible) animateVehicleRig(rig, v, 0, isNightOrDusk);
+          }
+        }
+
+        stepCharacterAnimRuntime(
+          this.playerAnimRuntime,
+          {
+            speed: 0,
+            vy: 0,
+            grounded: true,
+            isSprinting: false,
+            isMoving: false,
+            isDriving: false,
+            onStairs: false,
+            photoPose: this.photoState.pose,
+            sitting: this.photoState.pose === 'sit',
+            elapsedTime: this.worldElapsed,
+          },
+          dt,
+        );
+        const pGroundY = this.activeBlueprint
+          ? this.playerState.y
+          : getGroundHeightAt(this.playerState.x, this.playerState.z, CITY_LAYOUT, this.playerState.y);
+        applyArticulatedPoseToRig(
+          this.playerRig,
+          this.playerAnimRuntime.pose,
+          this.playerState.x,
+          this.playerState.y,
+          this.playerState.z,
+          this.playerState.yaw,
+          pGroundY,
+          1,
+        );
+        this.updatePhotoModeCamera(dt);
+        this.pushHudSnapshot(false);
       } else if (
         this.phase === 'playing' &&
         (this.previewMode === 'teacher' ||
@@ -3403,7 +3837,7 @@ export class UrbanWorldEngine {
               if (bt.timer >= 0.38 && bt.entrance) {
                 bt.swapped = true;
                 this.transitionFade = 1;
-                this.swapToInterior(bt.entrance);
+                this.swapToInterior(bt.entrance, bt.targetFloor);
               }
             } else {
               this.transitionFade = Math.max(0, 1 - (bt.timer - 0.38) / 0.22);
@@ -3419,7 +3853,7 @@ export class UrbanWorldEngine {
               if (bt.timer >= 0.34) {
                 bt.swapped = true;
                 this.transitionFade = 1;
-                this.exitInteriorToCity();
+                this.exitInteriorToCity(bt.rooftopTarget);
               }
             } else {
               this.transitionFade = Math.max(0, 1 - (bt.timer - 0.34) / 0.22);
@@ -3531,13 +3965,18 @@ export class UrbanWorldEngine {
             }
           }
 
-          // Open-Air Rooftop Skyline visibility: reveal city skyline & time-of-day sky only on Floor 22 Rooftop
+          // Open-Air Rooftop Skyline visibility: reveal city skyline, sky life & time-of-day sky on Floor 22 Rooftop
           if (res.floorInfo.hasOpenSky) {
             if (!this.builtCity.group.visible) {
               this.builtCity.group.visible = true;
             }
+            this.skyLifeRig.group.visible = true;
+            stepSkyLifeState(this.skyLifeState, dt);
+            this.skyLifeRig.update(this.skyLifeState);
+            this.builtCity.updateEnvironment(this.worldElapsed);
             this.updateTimeOfDayLighting(dt);
           } else {
+            this.skyLifeRig.group.visible = false;
             if (this.builtCity.group.visible) {
               this.builtCity.group.visible = false;
               (this.scene.background as THREE.Color).setHex(0x131822);
@@ -3613,12 +4052,52 @@ export class UrbanWorldEngine {
             }
           });
 
+          // Step Sky Wildlife, Aircraft, Boats & Airport Radar outdoors
+          this.skyLifeRig.group.visible = true;
+          stepSkyLifeState(this.skyLifeState, dt);
+          this.skyLifeRig.update(this.skyLifeState);
+          this.builtCity.updateEnvironment(this.worldElapsed);
+
           if (this.playerMode === 'on_foot') {
             const prevX = this.playerState.x;
             const prevZ = this.playerState.z;
             const prevYaw = this.playerState.yaw;
-            let events = { jumped: false, landed: false };
-            if (this.activeSitSpot) {
+            let events = { jumped: false, landed: false, vaulted: false };
+            this.lastLadderClimbSpeed = 0;
+
+            if (this.activeLadder) {
+              if (this.input.jumpJustPressed) {
+                const l = this.activeLadder;
+                this.activeLadder = null;
+                this.playerState.activeLadderId = null;
+                this.playerState.x = l.x + l.normalX * 1.1;
+                this.playerState.z = l.z + l.normalZ * 1.1;
+                this.playerState.vy = 2.0;
+                this.audio.playJump();
+              } else {
+                const climbInput = Math.max(
+                  -1,
+                  Math.min(1, this.input.moveY + (this.input.forward ? 1 : 0) - (this.input.backward ? 1 : 0)),
+                );
+                const ladderRes = stepLadderClimb(this.playerState, this.activeLadder, climbInput, dt);
+                this.lastLadderClimbSpeed = ladderRes.climbSpeed;
+                if (ladderRes.finished) {
+                  this.activeLadder = null;
+                  if (ladderRes.exitReason === 'reached_top') {
+                    const reachedRoof = findRooftopAt(
+                      this.playerState.x,
+                      this.playerState.y,
+                      this.playerState.z,
+                      CITY_LAYOUT,
+                    );
+                    if (reachedRoof) {
+                      this.showActivityToast(`Reached ${reachedRoof.name}!`);
+                    }
+                  }
+                  this.pushHudSnapshot(true);
+                }
+              }
+            } else if (this.activeSitSpot) {
               this.input.jumpJustPressed = false;
               this.playerState.elapsedTime += dt;
               this.playerState.speed = 0;
@@ -3629,26 +4108,41 @@ export class UrbanWorldEngine {
             this.input.jumpJustPressed = false;
             this.prevOnStairs = false;
             this.progression.totalDistance += Math.hypot(this.playerState.x - prevX, this.playerState.z - prevZ);
+            this.activeRooftop = findRooftopAt(
+              this.playerState.x,
+              this.playerState.y,
+              this.playerState.z,
+              CITY_LAYOUT,
+            );
 
             stepNpcs(this.npcs, dt, this.playerState.x, this.playerState.z, CITY_LAYOUT);
             resolvePlayerVsNpcs(this.playerState, this.npcs);
             this.resolvePedestrianVsVehicles();
 
             if (events.jumped) this.audio.playJump();
+            if (events.vaulted) {
+              this.spawnImpactParticles(this.playerState.x, this.playerState.y, this.playerState.z, 3);
+            }
             if (events.landed) {
               this.audio.playLand();
               this.spawnImpactParticles(this.playerState.x, this.playerState.y, this.playerState.z, 3);
             }
             this.audio.updateFootsteps(
               this.playerState.gaitPhase,
-              this.playerState.grounded,
-              this.playerState.isMoving,
+              this.playerState.grounded && !this.activeLadder,
+              this.playerState.isMoving && !this.activeLadder,
               this.playerState.isSprinting,
             );
             this.audio.updateEngineSound(false, 0, 1);
 
-            const groundY = getGroundHeightAt(this.playerState.x, this.playerState.z, CITY_LAYOUT);
+            const groundY = getGroundHeightAt(
+              this.playerState.x,
+              this.playerState.z,
+              CITY_LAYOUT,
+              this.playerState.y,
+            );
             const turnDeltaYaw = shortestAngleDelta(prevYaw, this.playerState.yaw) / Math.max(0.001, dt);
+            this.prevTurnDeltaYaw = turnDeltaYaw;
             stepCharacterAnimRuntime(
               this.playerAnimRuntime,
               {
@@ -3659,6 +4153,9 @@ export class UrbanWorldEngine {
                 isMoving: this.playerState.isMoving,
                 isDriving: false,
                 onStairs: false,
+                climbingLadder: Boolean(this.activeLadder),
+                climbSpeed: this.lastLadderClimbSpeed,
+                parkourActive: (this.playerState.parkourTimer ?? 0) > 0,
                 turnDeltaYaw,
                 sitting: Boolean(this.activeSitSpot),
                 elapsedTime: this.playerState.elapsedTime,

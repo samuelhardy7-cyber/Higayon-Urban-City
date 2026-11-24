@@ -25,6 +25,7 @@ export interface ColliderBox {
   maxZ: number;
   kind: 'building' | 'house' | 'vehicle' | 'container' | 'prop' | 'barrier';
   blocksCamera: boolean;
+  vaultable?: boolean;
 }
 
 export interface BlockZone {
@@ -175,6 +176,85 @@ export interface FountainSpec {
   y: number;
   z: number;
   radius: number;
+}
+
+export interface ExteriorLadderSpec {
+  id: string;
+  buildingId: string;
+  label: string;
+  /** World X/Z where ladder rails sit flush against wall */
+  x: number;
+  z: number;
+  /** Outward normal direction from wall so player stands just outside ladder */
+  normalX: number;
+  normalZ: number;
+  /** Facing yaw toward wall when climbing */
+  climbYaw: number;
+  bottomY: number;
+  topY: number;
+  /** Where player steps onto rooftop at top of ladder */
+  topStepX: number;
+  topStepZ: number;
+}
+
+export interface RooftopPropSpec {
+  id: string;
+  kind: 'planter' | 'tree' | 'bench' | 'telescope' | 'pergola' | 'hvac' | 'helipad_light' | 'stairhouse';
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  height: number;
+  rotY?: number;
+  color?: number;
+  vaultable?: boolean;
+}
+
+export interface RooftopSpec {
+  id: string;
+  buildingId: string;
+  name: string;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  y: number;
+  theme: 'helipad_skydeck' | 'garden_terrace' | 'lounge_deck' | 'industrial_helipad' | 'coastal_terrace';
+  hasHelipad?: boolean;
+  hasGarden?: boolean;
+  hasTelescopes?: boolean;
+  /** Rooftop stairwell door that leads directly into top floor of interior */
+  interiorAccessDoor?: {
+    x: number;
+    z: number;
+    yaw: number;
+    targetFloor: number;
+  };
+  props: RooftopPropSpec[];
+}
+
+export type PhotoPoseId =
+  | 'photo_cool'
+  | 'photo_hero'
+  | 'photo_peace'
+  | 'photo_victory'
+  | 'photo_scholar'
+  | 'photo_parkour'
+  | 'wave'
+  | 'sit';
+
+export type PhotoFilterId = 'natural' | 'golden' | 'cinema' | 'vivid';
+
+export interface PhotoModeState {
+  active: boolean;
+  pose: PhotoPoseId;
+  orbitYaw: number;
+  orbitPitch: number;
+  distance: number;
+  fov: number;
+  filter: PhotoFilterId;
+  hideUi: boolean;
+  panY: number;
 }
 
 export interface LandmarkPin {
@@ -520,6 +600,13 @@ export interface InteriorDoorSpec {
   height: number;
   thickness: number;
   isExitDoor: boolean;
+  rooftopTarget?: {
+    rooftopId: string;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+  };
   color: number;
   style: 'wood' | 'glass' | 'metal';
 }
@@ -620,6 +707,8 @@ export interface CityLayout {
   fountains: FountainSpec[];
   landmarks: LandmarkPin[];
   npcLoops: NpcWaypointLoop[];
+  ladders: ExteriorLadderSpec[];
+  rooftops: RooftopSpec[];
   colliders: ColliderBox[];
 }
 
@@ -631,6 +720,7 @@ export interface PlayerState {
   vy: number;
   vz: number;
   yaw: number;
+  turnRate?: number;
   cameraYaw: number;
   cameraPitch: number;
   grounded: boolean;
@@ -646,6 +736,9 @@ export interface PlayerState {
   distanceWalked: number;
   elapsedTime: number;
   squashY: number;
+  activeLadderId?: string | null;
+  parkourTimer?: number;
+  activeRooftopId?: string | null;
 }
 
 export interface InputState {
@@ -699,9 +792,15 @@ export interface HudSnapshot {
       | 'sit_seat'
       | 'quiz_kiosk'
       | 'reward_shop'
-      | 'player_social';
+      | 'player_social'
+      | 'climb_ladder'
+      | 'rooftop_enter'
+      | 'rooftop_exit';
     label: string;
   } | null;
+  activeRooftopName?: string | null;
+  isClimbingLadder?: boolean;
+  photoModeActive?: boolean;
   activeMission: {
     id: string;
     type: MissionType;

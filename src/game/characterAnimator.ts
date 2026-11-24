@@ -1,3 +1,5 @@
+import type { PhotoPoseId } from './types';
+
 export type CharacterAnimState =
   | 'idle'
   | 'idle_shift'
@@ -14,6 +16,8 @@ export type CharacterAnimState =
   | 'land'
   | 'climb_stairs'
   | 'descend_stairs'
+  | 'climb_ladder'
+  | 'parkour_vault'
   | 'enter_elevator'
   | 'exit_elevator'
   | 'open_door'
@@ -41,7 +45,13 @@ export type CharacterAnimState =
   | 'approach_vehicle'
   | 'enter_vehicle'
   | 'drive'
-  | 'exit_vehicle';
+  | 'exit_vehicle'
+  | 'photo_cool'
+  | 'photo_hero'
+  | 'photo_peace'
+  | 'photo_victory'
+  | 'photo_scholar'
+  | 'photo_parkour';
 
 export type EmoteKind =
   | 'wave'
@@ -79,6 +89,8 @@ export const EMOTE_WHEEL_OPTIONS: EmoteWheelOption[] = [
   { kind: 'show_accessory', label: 'Show Gear', animState: 'show_accessory', durationSec: 2.2, looped: false },
 ];
 
+export type FaceMood = 'neutral' | 'smile' | 'grin' | 'focused' | 'wink';
+
 export interface ArticulatedPose {
   hipsY: number;
   hipsPitch: number;
@@ -88,6 +100,7 @@ export interface ArticulatedPose {
   torsoRoll: number;
   headYaw: number;
   headPitch: number;
+  headRoll: number;
   lShoulderX: number;
   lShoulderZ: number;
   lElbowX: number;
@@ -102,6 +115,12 @@ export interface ArticulatedPose {
   rHipZ: number;
   rKneeX: number;
   rAnkleX: number;
+  hairSwingX: number;
+  hairSwingZ: number;
+  coatSwingX: number;
+  scarfSwingZ: number;
+  blinkWeight: number;
+  faceMood: FaceMood;
 }
 
 export interface CharacterAnimRuntime {
@@ -114,6 +133,8 @@ export interface CharacterAnimRuntime {
   wasGrounded: boolean;
   idleTimer: number;
   gaitPhase: number;
+  ladderPhase: number;
+  blinkTimer: number;
   emoteKind: EmoteKind | null;
   emoteSeq: number;
   pose: ArticulatedPose;
@@ -131,6 +152,10 @@ export interface AnimResolveParams {
   leanAngle?: number;
   onStairs: boolean;
   stairDirection?: 'up' | 'down' | 'none';
+  climbingLadder?: boolean;
+  climbSpeed?: number;
+  parkourActive?: boolean;
+  photoPose?: PhotoPoseId | null;
   backward?: boolean;
   turnDeltaYaw?: number;
   inElevator?: boolean;
@@ -148,6 +173,7 @@ export function createNeutralPose(): ArticulatedPose {
     torsoRoll: 0,
     headYaw: 0,
     headPitch: 0,
+    headRoll: 0,
     lShoulderX: 0,
     lShoulderZ: 0.08,
     lElbowX: -0.1,
@@ -162,6 +188,12 @@ export function createNeutralPose(): ArticulatedPose {
     rHipZ: -0.03,
     rKneeX: 0.04,
     rAnkleX: 0,
+    hairSwingX: 0.04,
+    hairSwingZ: 0,
+    coatSwingX: 0.02,
+    scarfSwingZ: 0,
+    blinkWeight: 0,
+    faceMood: 'neutral',
   };
 }
 
@@ -176,6 +208,8 @@ export function createCharacterAnimRuntime(): CharacterAnimRuntime {
     wasGrounded: true,
     idleTimer: 0,
     gaitPhase: 0,
+    ladderPhase: 0,
+    blinkTimer: 0,
     emoteKind: null,
     emoteSeq: 0,
     pose: createNeutralPose(),
@@ -211,8 +245,17 @@ export function resolveCharacterAnimState(
   rt: CharacterAnimRuntime,
   params: AnimResolveParams,
 ): CharacterAnimState {
+  if (params.photoPose) {
+    return params.photoPose;
+  }
   if (params.isDriving) {
     return 'drive';
+  }
+  if (params.climbingLadder) {
+    return 'climb_ladder';
+  }
+  if (params.parkourActive) {
+    return 'parkour_vault';
   }
   if (!params.grounded) {
     return params.vy > 0.65 ? 'jump' : 'fall';
@@ -247,16 +290,14 @@ export function resolveCharacterAnimState(
     return 'walk';
   }
 
-  // Active emote / interaction plays while stationary
   if (rt.actionState) {
     return rt.actionState;
   }
 
-  if (Math.abs(params.turnDeltaYaw ?? 0) > 0.9) {
+  if (Math.abs(params.turnDeltaYaw ?? 0) > 0.75) {
     return (params.turnDeltaYaw ?? 0) > 0 ? 'turn_left' : 'turn_right';
   }
 
-  // Rich multi-stage idle variation (breathing -> weight shift -> look around)
   const cycle = params.elapsedTime % 11.5;
   if (cycle > 7.8) return 'idle_look';
   if (cycle > 3.6 && cycle < 6.4) return 'idle_shift';
@@ -266,6 +307,7 @@ export function resolveCharacterAnimState(
 function computeTargetPose(
   state: CharacterAnimState,
   gait: number,
+  ladderPhase: number,
   elapsed: number,
   actionTimer: number,
   params: AnimResolveParams,
@@ -277,12 +319,13 @@ function computeTargetPose(
     case 'idle': {
       p.hipsY = breath * 0.014;
       p.torsoPitch = 0.015 + breath * 0.01;
-      p.lShoulderZ = 0.09 + breath * 0.012;
-      p.rShoulderZ = -0.09 - breath * 0.012;
-      p.lElbowX = -0.14;
-      p.rElbowX = -0.14;
+      p.lShoulderZ = 0.09 + breath * 0.014;
+      p.rShoulderZ = -0.09 - breath * 0.014;
+      p.lElbowX = -0.15;
+      p.rElbowX = -0.15;
       p.lKneeX = 0.05;
       p.rKneeX = 0.05;
+      p.faceMood = 'smile';
       break;
     }
     case 'idle_shift': {
@@ -291,6 +334,7 @@ function computeTargetPose(
       p.hipsRoll = sway * 0.045;
       p.torsoRoll = -sway * 0.035;
       p.headYaw = -sway * 0.08;
+      p.headRoll = sway * 0.04;
       p.lHipX = sway > 0 ? -0.08 : 0.04;
       p.lKneeX = sway > 0 ? 0.16 : 0.03;
       p.rHipX = sway < 0 ? -0.08 : 0.04;
@@ -299,77 +343,98 @@ function computeTargetPose(
       p.rShoulderZ = -0.11;
       p.lElbowX = -0.22;
       p.rElbowX = -0.22;
+      p.hairSwingZ = -sway * 0.06;
+      p.faceMood = 'neutral';
       break;
     }
     case 'idle_look': {
       const look = Math.sin(elapsed * 1.5);
       p.hipsY = breath * 0.012;
-      p.torsoYaw = look * 0.12;
-      p.headYaw = look * 0.36;
-      p.headPitch = Math.sin(elapsed * 0.9) * 0.07;
+      p.torsoYaw = look * 0.14;
+      p.headYaw = look * 0.4;
+      p.headPitch = Math.sin(elapsed * 0.9) * 0.08;
+      p.headRoll = look * 0.05;
       p.lShoulderX = -0.06 * look;
       p.rShoulderX = 0.06 * look;
       p.lElbowX = -0.2;
       p.rElbowX = -0.2;
+      p.hairSwingZ = -look * 0.08;
+      p.faceMood = 'smile';
       break;
     }
     case 'walk':
     case 'fast_walk':
     case 'walk_backward': {
       const dir = state === 'walk_backward' ? -1 : 1;
-      const amp = state === 'fast_walk' ? 0.66 : 0.52;
+      const amp = state === 'fast_walk' ? 0.68 : 0.54;
       const s = Math.sin(gait) * dir;
       const c = Math.cos(gait);
       const liftL = Math.max(0, Math.sin(gait + Math.PI * 0.45));
       const liftR = Math.max(0, Math.sin(gait + Math.PI * 1.45));
+      const turnLean = Math.max(-0.18, Math.min(0.18, (params.turnDeltaYaw ?? 0) * 0.06));
 
-      p.hipsY = Math.abs(c) * 0.032 - 0.012;
-      p.hipsRoll = s * 0.04;
-      p.torsoPitch = state === 'fast_walk' ? 0.08 : state === 'walk_backward' ? -0.04 : 0.045;
-      p.torsoYaw = -s * 0.12;
-      p.headYaw = s * 0.05;
+      p.hipsY = Math.abs(c) * 0.035 - 0.012;
+      p.hipsRoll = s * 0.045;
+      p.torsoPitch = state === 'fast_walk' ? 0.09 : state === 'walk_backward' ? -0.04 : 0.05;
+      p.torsoYaw = -s * 0.13;
+      p.torsoRoll = turnLean;
+      p.headYaw = s * 0.05 + turnLean * 1.3;
+      p.headRoll = -turnLean * 0.4;
 
       p.lHipX = s * amp;
       p.rHipX = -s * amp;
-      p.lKneeX = 0.08 + liftL * (state === 'fast_walk' ? 0.68 : 0.52);
-      p.rKneeX = 0.08 + liftR * (state === 'fast_walk' ? 0.68 : 0.52);
-      p.lAnkleX = -s * 0.14 - liftL * 0.12;
-      p.rAnkleX = s * 0.14 - liftR * 0.12;
+      p.lKneeX = 0.08 + liftL * (state === 'fast_walk' ? 0.72 : 0.55);
+      p.rKneeX = 0.08 + liftR * (state === 'fast_walk' ? 0.72 : 0.55);
+      p.lAnkleX = -s * 0.16 - liftL * 0.12;
+      p.rAnkleX = s * 0.16 - liftR * 0.12;
 
-      p.lShoulderX = -s * amp * 0.72;
-      p.rShoulderX = s * amp * 0.72;
-      p.lElbowX = -0.25 - Math.max(0, -s) * 0.32;
-      p.rElbowX = -0.25 - Math.max(0, s) * 0.32;
+      p.lShoulderX = -s * amp * 0.74;
+      p.rShoulderX = s * amp * 0.74;
+      p.lElbowX = -0.26 - Math.max(0, -s) * 0.34;
+      p.rElbowX = -0.26 - Math.max(0, s) * 0.34;
+      p.hairSwingX = 0.14 + Math.abs(c) * 0.09;
+      p.hairSwingZ = s * 0.08 - turnLean * 0.8;
+      p.coatSwingX = 0.12 + Math.abs(s) * 0.08;
+      p.scarfSwingZ = s * 0.11;
+      p.faceMood = 'smile';
       break;
     }
     case 'jog':
     case 'sprint': {
       const isSprint = state === 'sprint';
-      const amp = isSprint ? 0.98 : 0.78;
+      const amp = isSprint ? 1.0 : 0.8;
       const s = Math.sin(gait);
       const c = Math.cos(gait);
       const liftL = Math.max(0, Math.sin(gait + Math.PI * 0.5));
       const liftR = Math.max(0, Math.sin(gait + Math.PI * 1.5));
+      const turnLean = Math.max(-0.24, Math.min(0.24, (params.turnDeltaYaw ?? 0) * 0.08));
 
-      p.hipsY = Math.abs(c) * (isSprint ? 0.075 : 0.052) - 0.025;
+      p.hipsY = Math.abs(c) * (isSprint ? 0.08 : 0.055) - 0.025;
       p.hipsPitch = isSprint ? 0.1 : 0.05;
-      p.hipsRoll = s * 0.06;
-      p.torsoPitch = isSprint ? 0.24 : 0.14;
-      p.torsoYaw = -s * (isSprint ? 0.2 : 0.15);
+      p.hipsRoll = s * 0.065;
+      p.torsoPitch = isSprint ? 0.25 : 0.15;
+      p.torsoYaw = -s * (isSprint ? 0.22 : 0.16);
+      p.torsoRoll = turnLean;
+      p.headYaw = turnLean * 1.2;
 
       p.lHipX = s * amp;
       p.rHipX = -s * amp;
-      p.lKneeX = 0.16 + liftL * (isSprint ? 1.15 : 0.9);
-      p.rKneeX = 0.16 + liftR * (isSprint ? 1.15 : 0.9);
-      p.lAnkleX = -s * 0.22;
-      p.rAnkleX = s * 0.22;
+      p.lKneeX = 0.16 + liftL * (isSprint ? 1.18 : 0.92);
+      p.rKneeX = 0.16 + liftR * (isSprint ? 1.18 : 0.92);
+      p.lAnkleX = -s * 0.24;
+      p.rAnkleX = s * 0.24;
 
-      p.lShoulderX = -s * amp * 0.92;
-      p.rShoulderX = s * amp * 0.92;
-      p.lShoulderZ = 0.13;
-      p.rShoulderZ = -0.13;
-      p.lElbowX = isSprint ? -1.18 : -0.82;
-      p.rElbowX = isSprint ? -1.18 : -0.82;
+      p.lShoulderX = -s * amp * 0.94;
+      p.rShoulderX = s * amp * 0.94;
+      p.lShoulderZ = 0.14;
+      p.rShoulderZ = -0.14;
+      p.lElbowX = isSprint ? -1.2 : -0.85;
+      p.rElbowX = isSprint ? -1.2 : -0.85;
+      p.hairSwingX = (isSprint ? 0.36 : 0.25) + Math.abs(c) * 0.15;
+      p.hairSwingZ = s * 0.14 - turnLean * 1.1;
+      p.coatSwingX = (isSprint ? 0.34 : 0.22) + Math.abs(c) * 0.12;
+      p.scarfSwingZ = s * 0.22 + (isSprint ? 0.16 : 0.08);
+      p.faceMood = isSprint ? 'focused' : 'smile';
       break;
     }
     case 'climb_stairs':
@@ -393,68 +458,127 @@ function computeTargetPose(
       p.rShoulderX = s * 0.48;
       p.lElbowX = -0.45;
       p.rElbowX = -0.45;
+      p.hairSwingX = 0.14;
+      p.faceMood = 'focused';
+      break;
+    }
+    case 'climb_ladder': {
+      const s = Math.sin(ladderPhase);
+      const reachL = Math.max(0, s);
+      const reachR = Math.max(0, -s);
+      p.hipsY = Math.abs(Math.cos(ladderPhase)) * 0.04 - 0.03;
+      p.torsoPitch = 0.08;
+      p.torsoYaw = s * 0.09;
+      p.headPitch = -0.26;
+      p.lShoulderX = -1.65 - reachL * 0.65;
+      p.rShoulderX = -1.65 - reachR * 0.65;
+      p.lShoulderZ = 0.14;
+      p.rShoulderZ = -0.14;
+      p.lElbowX = -0.78 + reachL * 0.35;
+      p.rElbowX = -0.78 + reachR * 0.35;
+      p.lHipX = -0.62 - reachR * 0.42;
+      p.rHipX = -0.62 - reachL * 0.42;
+      p.lKneeX = 0.92 + reachR * 0.45;
+      p.rKneeX = 0.92 + reachL * 0.45;
+      p.lAnkleX = -0.15;
+      p.rAnkleX = -0.15;
+      p.hairSwingX = 0.16;
+      p.faceMood = 'focused';
+      break;
+    }
+    case 'parkour_vault': {
+      p.hipsY = 0.12;
+      p.hipsPitch = 0.16;
+      p.torsoPitch = 0.42;
+      p.torsoYaw = 0.22;
+      p.headPitch = -0.18;
+      p.lShoulderX = -1.25;
+      p.lElbowX = -0.35;
+      p.rShoulderX = 0.55;
+      p.rShoulderZ = -0.32;
+      p.rElbowX = -0.45;
+      p.lHipX = -1.05;
+      p.lKneeX = 1.45;
+      p.rHipX = 0.24;
+      p.rKneeX = 0.65;
+      p.hairSwingX = 0.44;
+      p.coatSwingX = 0.48;
+      p.scarfSwingZ = 0.28;
+      p.faceMood = 'focused';
       break;
     }
     case 'turn_left':
     case 'turn_right': {
       const dir = state === 'turn_left' ? 1 : -1;
       const step = Math.sin(elapsed * 8.5);
-      p.torsoYaw = dir * 0.18;
-      p.headYaw = dir * 0.24;
-      p.lHipX = step * 0.22;
-      p.rHipX = -step * 0.22;
-      p.lKneeX = 0.15;
-      p.rKneeX = 0.15;
-      p.lShoulderX = -step * 0.18;
-      p.rShoulderX = step * 0.18;
+      p.torsoYaw = dir * 0.22;
+      p.torsoRoll = -dir * 0.08;
+      p.headYaw = dir * 0.3;
+      p.headRoll = dir * 0.05;
+      p.lHipX = step * 0.24;
+      p.rHipX = -step * 0.24;
+      p.lKneeX = 0.16;
+      p.rKneeX = 0.16;
+      p.lShoulderX = -step * 0.2;
+      p.rShoulderX = step * 0.2;
+      p.hairSwingZ = -dir * 0.16;
+      p.coatSwingX = 0.08;
       break;
     }
     case 'jump': {
-      p.hipsY = 0.05;
+      p.hipsY = 0.06;
       p.torsoPitch = 0.1;
-      p.lShoulderX = -0.95;
-      p.rShoulderX = -0.95;
-      p.lShoulderZ = 0.25;
-      p.rShoulderZ = -0.25;
+      p.lShoulderX = -0.98;
+      p.rShoulderX = -0.98;
+      p.lShoulderZ = 0.26;
+      p.rShoulderZ = -0.26;
       p.lElbowX = -0.45;
       p.rElbowX = -0.45;
-      p.lHipX = -0.45;
-      p.rHipX = 0.18;
-      p.lKneeX = 0.78;
-      p.rKneeX = 0.28;
+      p.lHipX = -0.48;
+      p.rHipX = 0.2;
+      p.lKneeX = 0.82;
+      p.rKneeX = 0.3;
+      p.hairSwingX = 0.32;
+      p.coatSwingX = 0.35;
+      p.faceMood = 'grin';
       break;
     }
     case 'fall': {
-      const flail = Math.sin(elapsed * 9.0) * 0.12;
+      const flail = Math.sin(elapsed * 9.0) * 0.14;
       p.hipsY = 0.02;
       p.torsoPitch = 0.14;
-      p.lShoulderX = -1.25 + flail;
-      p.rShoulderX = -1.25 - flail;
-      p.lShoulderZ = 0.36;
-      p.rShoulderZ = -0.36;
+      p.lShoulderX = -1.28 + flail;
+      p.rShoulderX = -1.28 - flail;
+      p.lShoulderZ = 0.38;
+      p.rShoulderZ = -0.38;
       p.lElbowX = -0.32;
       p.rElbowX = -0.32;
       p.lHipX = -0.25;
       p.rHipX = -0.12;
       p.lKneeX = 0.45;
       p.rKneeX = 0.35;
+      p.hairSwingX = 0.45;
+      p.coatSwingX = 0.45;
+      p.faceMood = 'focused';
       break;
     }
     case 'land': {
-      p.hipsY = -0.14;
-      p.torsoPitch = 0.22;
-      p.lHipX = -0.52;
-      p.rHipX = -0.52;
-      p.lKneeX = 0.95;
-      p.rKneeX = 0.95;
-      p.lAnkleX = -0.32;
-      p.rAnkleX = -0.32;
-      p.lShoulderX = 0.24;
-      p.rShoulderX = 0.24;
-      p.lShoulderZ = 0.22;
-      p.rShoulderZ = -0.22;
+      p.hipsY = -0.15;
+      p.torsoPitch = 0.24;
+      p.lHipX = -0.55;
+      p.rHipX = -0.55;
+      p.lKneeX = 0.98;
+      p.rKneeX = 0.98;
+      p.lAnkleX = -0.34;
+      p.rAnkleX = -0.34;
+      p.lShoulderX = 0.26;
+      p.rShoulderX = 0.26;
+      p.lShoulderZ = 0.24;
+      p.rShoulderZ = -0.24;
       p.lElbowX = -0.5;
       p.rElbowX = -0.5;
+      p.hairSwingX = -0.06;
+      p.coatSwingX = 0.18;
       break;
     }
     case 'sit': {
@@ -469,6 +593,7 @@ function computeTargetPose(
       p.lElbowX = -0.58;
       p.rElbowX = -0.58;
       p.headYaw = Math.sin(elapsed * 0.9) * 0.14;
+      p.faceMood = 'smile';
       break;
     }
     case 'drive': {
@@ -485,6 +610,7 @@ function computeTargetPose(
       p.rShoulderX = -0.78 + steer * 0.2;
       p.lElbowX = -0.55;
       p.rElbowX = -0.55;
+      p.faceMood = 'focused';
       break;
     }
     case 'wave':
@@ -493,12 +619,14 @@ function computeTargetPose(
       p.hipsY = breath * 0.015;
       p.torsoRoll = -0.06;
       p.headYaw = state === 'greet' ? 0.1 : -0.08;
+      p.headRoll = 0.06;
       p.headPitch = state === 'greet' ? 0.16 * Math.sin(Math.min(1, actionTimer * 2.5) * Math.PI) : -0.04;
       p.rShoulderX = -2.25;
       p.rShoulderZ = -0.35 + w * 0.26;
       p.rElbowX = -0.55 + w * 0.28;
       p.lShoulderZ = 0.1;
       p.lElbowX = -0.18;
+      p.faceMood = 'grin';
       break;
     }
     case 'clap': {
@@ -511,22 +639,116 @@ function computeTargetPose(
       p.rShoulderZ = 0.18 - c * 0.28;
       p.lElbowX = -0.95;
       p.rElbowX = -0.95;
+      p.faceMood = 'grin';
       break;
     }
     case 'celebrate':
-    case 'victory': {
-      const bounce = Math.abs(Math.sin(actionTimer * 8.0));
-      p.hipsY = bounce * 0.14;
+    case 'victory':
+    case 'photo_victory': {
+      const t = state === 'photo_victory' ? elapsed * 2.5 : actionTimer;
+      const bounce = state === 'photo_victory' ? 0.45 + Math.sin(t) * 0.1 : Math.abs(Math.sin(t * 8.0));
+      p.hipsY = bounce * 0.12;
       p.torsoPitch = -0.08;
-      p.headPitch = -0.18;
+      p.headPitch = -0.16;
+      p.headRoll = 0.08;
       p.lShoulderX = -2.65;
       p.rShoulderX = -2.65;
-      p.lShoulderZ = 0.28 + bounce * 0.15;
-      p.rShoulderZ = -0.28 - bounce * 0.15;
+      p.lShoulderZ = 0.28 + bounce * 0.14;
+      p.rShoulderZ = -0.28 - bounce * 0.14;
       p.lElbowX = -0.25;
       p.rElbowX = -0.25;
       p.lKneeX = bounce > 0.5 ? 0.35 : 0.05;
       p.rKneeX = bounce > 0.5 ? 0.1 : 0.25;
+      p.hairSwingX = 0.18;
+      p.faceMood = 'grin';
+      break;
+    }
+    case 'photo_cool': {
+      p.hipsRoll = 0.06;
+      p.torsoYaw = -0.24;
+      p.torsoRoll = -0.05;
+      p.headYaw = 0.22;
+      p.headRoll = 0.06;
+      p.lShoulderX = -0.35;
+      p.lShoulderZ = 0.18;
+      p.lElbowX = -1.15;
+      p.rShoulderX = 0.14;
+      p.rShoulderZ = -0.14;
+      p.rElbowX = -0.35;
+      p.lHipX = -0.08;
+      p.lKneeX = 0.18;
+      p.rHipX = 0.06;
+      p.faceMood = 'smile';
+      break;
+    }
+    case 'photo_hero': {
+      p.hipsY = -0.04;
+      p.torsoPitch = -0.08;
+      p.torsoYaw = 0.18;
+      p.headYaw = -0.16;
+      p.headPitch = -0.1;
+      p.lShoulderX = -0.22;
+      p.lShoulderZ = 0.28;
+      p.lElbowX = -0.95;
+      p.rShoulderX = -1.65;
+      p.rShoulderZ = -0.24;
+      p.rElbowX = -0.25;
+      p.lHipX = -0.18;
+      p.lKneeX = 0.26;
+      p.rHipX = 0.16;
+      p.coatSwingX = 0.24;
+      p.hairSwingX = 0.15;
+      p.faceMood = 'focused';
+      break;
+    }
+    case 'photo_peace': {
+      p.hipsRoll = -0.06;
+      p.torsoYaw = 0.16;
+      p.headYaw = -0.12;
+      p.headRoll = 0.12;
+      p.rShoulderX = -1.85;
+      p.rShoulderZ = -0.25;
+      p.rElbowX = -0.82;
+      p.lShoulderX = -0.25;
+      p.lShoulderZ = 0.22;
+      p.lElbowX = -0.95;
+      p.lKneeX = 0.22;
+      p.lHipX = -0.14;
+      p.faceMood = 'wink';
+      break;
+    }
+    case 'photo_scholar': {
+      p.torsoPitch = 0.04;
+      p.torsoYaw = -0.12;
+      p.headYaw = 0.1;
+      p.headPitch = 0.12;
+      p.lShoulderX = -0.88;
+      p.lShoulderZ = -0.14;
+      p.lElbowX = -1.05;
+      p.rShoulderX = -1.15;
+      p.rShoulderZ = 0.1;
+      p.rElbowX = -1.15;
+      p.faceMood = 'smile';
+      break;
+    }
+    case 'photo_parkour': {
+      p.hipsY = 0.08;
+      p.torsoPitch = 0.34;
+      p.torsoYaw = 0.24;
+      p.headYaw = -0.22;
+      p.headPitch = -0.16;
+      p.lShoulderX = -1.35;
+      p.lElbowX = -0.4;
+      p.rShoulderX = 0.65;
+      p.rShoulderZ = -0.3;
+      p.rElbowX = -0.35;
+      p.lHipX = -1.0;
+      p.lKneeX = 1.4;
+      p.rHipX = 0.28;
+      p.rKneeX = 0.52;
+      p.hairSwingX = 0.38;
+      p.coatSwingX = 0.42;
+      p.faceMood = 'grin';
       break;
     }
     case 'laugh': {
@@ -539,6 +761,7 @@ function computeTargetPose(
       p.rShoulderZ = 0.22;
       p.lShoulderX = -0.25;
       p.lElbowX = -0.4;
+      p.faceMood = 'grin';
       break;
     }
     case 'handshake': {
@@ -550,6 +773,7 @@ function computeTargetPose(
       p.rElbowX = -0.45 + pump;
       p.lShoulderZ = 0.1;
       p.lElbowX = -0.18;
+      p.faceMood = 'smile';
       break;
     }
     case 'high_five': {
@@ -561,6 +785,7 @@ function computeTargetPose(
       p.rShoulderZ = -0.18;
       p.rElbowX = -0.18;
       p.lShoulderX = 0.25;
+      p.faceMood = 'grin';
       break;
     }
     case 'kp_excited': {
@@ -574,6 +799,8 @@ function computeTargetPose(
       p.rShoulderZ = -0.35;
       p.lKneeX = jumpLoop * 0.45;
       p.rKneeX = jumpLoop * 0.45;
+      p.hairSwingX = 0.28;
+      p.faceMood = 'grin';
       break;
     }
     case 'show_accessory': {
@@ -585,6 +812,8 @@ function computeTargetPose(
       p.lElbowX = -1.2;
       p.rShoulderX = -0.35;
       p.rElbowX = -0.4;
+      p.hairSwingZ = -turn * 0.15;
+      p.faceMood = 'smile';
       break;
     }
     case 'rare_outfit_celebrate': {
@@ -598,6 +827,8 @@ function computeTargetPose(
       p.rShoulderZ = -0.55 - flourish * 0.25;
       p.lElbowX = -0.3;
       p.rElbowX = -0.3;
+      p.coatSwingX = 0.25;
+      p.faceMood = 'grin';
       break;
     }
     case 'disappoint': {
@@ -610,6 +841,7 @@ function computeTargetPose(
       p.rShoulderX = -0.32;
       p.lElbowX = -1.25;
       p.rElbowX = -1.25;
+      p.faceMood = 'focused';
       break;
     }
     case 'dance': {
@@ -620,6 +852,7 @@ function computeTargetPose(
       p.torsoRoll = -step * 0.1;
       p.torsoYaw = step * 0.24;
       p.headYaw = -step * 0.15;
+      p.headRoll = step * 0.08;
       p.lShoulderX = -1.25 + groove * 0.5;
       p.rShoulderX = -1.25 - groove * 0.5;
       p.lShoulderZ = 0.35;
@@ -630,6 +863,9 @@ function computeTargetPose(
       p.lKneeX = Math.max(0, step) * 0.7;
       p.rHipX = -Math.max(0, -step) * 0.45;
       p.rKneeX = Math.max(0, -step) * 0.7;
+      p.hairSwingZ = -step * 0.2;
+      p.scarfSwingZ = step * 0.22;
+      p.faceMood = 'grin';
       break;
     }
     case 'point': {
@@ -639,6 +875,7 @@ function computeTargetPose(
       p.rShoulderZ = -0.05;
       p.rElbowX = -0.06;
       p.lElbowX = -0.2;
+      p.faceMood = 'smile';
       break;
     }
     case 'open_door':
@@ -674,6 +911,7 @@ function computeTargetPose(
       p.rShoulderZ = 0.16;
       p.lElbowX = -0.95;
       p.rElbowX = -0.95;
+      p.faceMood = 'focused';
       break;
     }
     case 'stand':
@@ -714,8 +952,7 @@ export function stepCharacterAnimRuntime(
 
   if (rt.actionState) {
     rt.actionTimer += dt;
-    // Cancel active emote immediately if player starts moving or driving or airborne
-    if (params.isMoving || params.speed > 0.45 || !params.grounded || params.isDriving) {
+    if (params.isMoving || params.speed > 0.45 || !params.grounded || params.isDriving || params.climbingLadder) {
       clearCharacterAction(rt);
     } else if (!rt.actionLooped && rt.actionTimer >= rt.actionDuration) {
       clearCharacterAction(rt);
@@ -725,8 +962,12 @@ export function stepCharacterAnimRuntime(
   const nextState = resolveCharacterAnimState(rt, params);
   rt.currentState = nextState;
 
-  // Speed-matched gait cadence (prevents foot sliding across walk/jog/sprint/stairs)
-  if (params.grounded && (params.isMoving || params.speed > 0.25)) {
+  if (nextState === 'climb_ladder') {
+    const climbMag = Math.abs(params.climbSpeed ?? 0);
+    if (climbMag > 0.1) {
+      rt.ladderPhase += (params.climbSpeed ?? 0) * 2.4 * dt;
+    }
+  } else if (params.grounded && (params.isMoving || params.speed > 0.25)) {
     const strideScale =
       nextState === 'climb_stairs' || nextState === 'descend_stairs'
         ? 2.45
@@ -738,11 +979,22 @@ export function stepCharacterAnimRuntime(
     rt.gaitPhase += params.speed * strideScale * dt;
   }
 
-  const target = computeTargetPose(nextState, rt.gaitPhase, params.elapsedTime, rt.actionTimer, params);
+  // Natural eye blink cycle (every ~3.8s blink for ~0.15s)
+  rt.blinkTimer = (rt.blinkTimer + dt) % 3.8;
+  const naturalBlink = rt.blinkTimer < 0.15 ? Math.sin((rt.blinkTimer / 0.15) * Math.PI) : 0;
+
+  const target = computeTargetPose(
+    nextState,
+    rt.gaitPhase,
+    rt.ladderPhase,
+    params.elapsedTime,
+    rt.actionTimer,
+    params,
+  );
   const blendSpeed =
-    nextState === 'land' || nextState === 'jump'
-      ? 19
-      : nextState === 'sprint' || nextState === 'climb_stairs' || nextState === 'descend_stairs'
+    nextState === 'land' || nextState === 'jump' || nextState === 'parkour_vault'
+      ? 20
+      : nextState === 'sprint' || nextState === 'climb_stairs' || nextState === 'descend_stairs' || nextState === 'climb_ladder'
         ? 16
         : 12.5;
 
@@ -755,6 +1007,7 @@ export function stepCharacterAnimRuntime(
   p.torsoRoll = damp(p.torsoRoll, target.torsoRoll, blendSpeed, dt);
   p.headYaw = damp(p.headYaw, target.headYaw, blendSpeed, dt);
   p.headPitch = damp(p.headPitch, target.headPitch, blendSpeed, dt);
+  p.headRoll = damp(p.headRoll, target.headRoll, blendSpeed, dt);
   p.lShoulderX = damp(p.lShoulderX, target.lShoulderX, blendSpeed, dt);
   p.lShoulderZ = damp(p.lShoulderZ, target.lShoulderZ, blendSpeed, dt);
   p.lElbowX = damp(p.lElbowX, target.lElbowX, blendSpeed, dt);
@@ -769,6 +1022,12 @@ export function stepCharacterAnimRuntime(
   p.rHipZ = damp(p.rHipZ, target.rHipZ, blendSpeed, dt);
   p.rKneeX = damp(p.rKneeX, target.rKneeX, blendSpeed, dt);
   p.rAnkleX = damp(p.rAnkleX, target.rAnkleX, blendSpeed, dt);
+  p.hairSwingX = damp(p.hairSwingX, target.hairSwingX, 10, dt);
+  p.hairSwingZ = damp(p.hairSwingZ, target.hairSwingZ, 10, dt);
+  p.coatSwingX = damp(p.coatSwingX, target.coatSwingX, 10, dt);
+  p.scarfSwingZ = damp(p.scarfSwingZ, target.scarfSwingZ, 10, dt);
+  p.blinkWeight = naturalBlink;
+  p.faceMood = target.faceMood;
 
   return nextState;
 }

@@ -805,6 +805,32 @@ function buildMall(
       color: 0x38bdf8,
       style: 'glass',
     },
+    ...(buildingId === 'freedom_mall'
+      ? [
+          {
+            id: 'ml_rooftop_door',
+            label: 'Rooftop Sky Garden Door',
+            hingeX: 6.3,
+            y: f2Y,
+            hingeZ: minZ + 0.08,
+            closedYaw: 0,
+            openAngle: Math.PI * 0.48,
+            width: 1.4,
+            height: 2.38,
+            thickness: 0.08,
+            isExitDoor: false,
+            color: 0x0ea5e9,
+            style: 'metal' as const,
+            rooftopTarget: {
+              rooftopId: 'roof_freedom_mall',
+              x: 14.2,
+              y: 11.64,
+              z: -27.6,
+              yaw: 0,
+            },
+          },
+        ]
+      : []),
   ];
 
   const furniture: InteriorFurnitureProp[] = [
@@ -902,6 +928,32 @@ function buildOffice(
       color: 0x38bdf8,
       style: 'glass',
     },
+    ...(buildingId === 'civic_office_east'
+      ? [
+          {
+            id: 'of_rooftop_door',
+            label: 'Rooftop Garden Terrace Door',
+            hingeX: 4.75,
+            y: f2Y,
+            hingeZ: minZ + 0.08,
+            closedYaw: 0,
+            openAngle: Math.PI * 0.48,
+            width: 1.35,
+            height: 2.35,
+            thickness: 0.08,
+            isExitDoor: false,
+            color: 0x0ea5e9,
+            style: 'metal' as const,
+            rooftopTarget: {
+              rooftopId: 'roof_civic_office',
+              x: -15.0,
+              y: 24.14,
+              z: -27.8,
+              yaw: 0,
+            },
+          },
+        ]
+      : []),
   ];
 
   const furniture: InteriorFurnitureProp[] = [
@@ -1024,6 +1076,28 @@ function buildCityTower22F(
         { id: `ct_roof_w`, minX: minX - 0.12, maxX: minX + 0.14, minY: y0, maxY: y0 + 1.25, minZ, maxZ, color: railColor, kind: 'railing', blocksCamera: false },
         { id: `ct_roof_e`, minX: maxX - 0.14, maxX: maxX + 0.12, minY: y0, maxY: y0 + 1.25, minZ, maxZ, color: railColor, kind: 'railing', blocksCamera: false },
       );
+      doors.push({
+        id: 'ct_rooftop_door',
+        label: 'City Skydeck & Helipad Door',
+        hingeX: -7.1,
+        y: y0,
+        hingeZ: minZ + 0.1,
+        closedYaw: 0,
+        openAngle: Math.PI * 0.48,
+        width: 1.4,
+        height: 2.38,
+        thickness: 0.08,
+        isExitDoor: false,
+        color: 0x0ea5e9,
+        style: 'metal',
+        rooftopTarget: {
+          rooftopId: 'roof_freedom_tower',
+          x: -20.8,
+          y: 76.14,
+          z: -27.4,
+          yaw: 0,
+        },
+      });
     } else {
       const wallCol = f % 2 === 0 ? 0xdbe3eb : 0xe2e8f0;
       addPerimeterBox(walls, `ct_f${f}`, minX, maxX, minZ, maxZ, y0, y1, wallCol, f === 1 ? 2.2 : 0, 2.6, true, true);
@@ -1437,6 +1511,32 @@ function buildWarehouse(
       color: 0xd97706,
       style: 'metal',
     },
+    ...(buildingId === 'ind_warehouse'
+      ? [
+          {
+            id: 'wh_rooftop_door',
+            label: 'Rooftop Helipad Door',
+            hingeX: 5.45,
+            y: f2Y,
+            hingeZ: minZ + 0.08,
+            closedYaw: 0,
+            openAngle: Math.PI * 0.48,
+            width: 1.35,
+            height: 2.35,
+            thickness: 0.08,
+            isExitDoor: false,
+            color: 0x0ea5e9,
+            style: 'metal' as const,
+            rooftopTarget: {
+              rooftopId: 'roof_ind_warehouse',
+              x: 72.5,
+              y: 7.64,
+              z: -20.5,
+              yaw: 0,
+            },
+          },
+        ]
+      : []),
   ];
 
   const furniture: InteriorFurnitureProp[] = [

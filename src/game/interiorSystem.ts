@@ -24,7 +24,7 @@ import type {
 import { getGroundHeightAt, raycastCameraCollision, resolveCircleAABBCollision } from './worldData';
 
 export interface InteriorInteractable {
-  kind: 'building_exit' | 'interior_door' | 'elevator' | 'elevator_panel' | 'sit_seat' | 'reward_shop';
+  kind: 'building_exit' | 'rooftop_exit' | 'interior_door' | 'elevator' | 'elevator_panel' | 'sit_seat' | 'reward_shop';
   id: string;
   label: string;
   distance: number;
@@ -117,6 +117,32 @@ export function findSafeOutdoorExitPos(
     y: getGroundHeightAt(resolved.x, resolved.z, layout),
     z: resolved.z,
     yaw: entrance.yaw + Math.PI,
+  };
+}
+
+export function findInteriorRooftopEntrySpawn(
+  blueprint: InteriorBlueprint,
+  targetFloor: number,
+): { x: number; y: number; z: number; yaw: number } {
+  const roofDoor = blueprint.doors.find((d) => Boolean(d.rooftopTarget));
+  if (roofDoor) {
+    const midX = roofDoor.hingeX + Math.cos(roofDoor.closedYaw) * roofDoor.width * 0.5;
+    const midZ = roofDoor.hingeZ - Math.sin(roofDoor.closedYaw) * roofDoor.width * 0.5;
+    return {
+      x: midX,
+      y: roofDoor.y,
+      z: midZ + 1.4,
+      yaw: Math.PI,
+    };
+  }
+  const slab =
+    blueprint.floorSlabs.find((s) => s.floorNumber === targetFloor) ??
+    blueprint.floorSlabs[blueprint.floorSlabs.length - 1];
+  return {
+    x: slab ? (slab.minX + slab.maxX) * 0.5 : blueprint.spawn.x,
+    y: slab ? slab.y : 0,
+    z: slab ? (slab.minZ + slab.maxZ) * 0.5 : blueprint.spawn.z,
+    yaw: Math.PI,
   };
 }
 
@@ -622,13 +648,23 @@ export function findNearestInteriorInteractable(
     const midX = d.hingeX + Math.cos(d.closedYaw) * d.width * 0.5;
     const midZ = d.hingeZ - Math.sin(d.closedYaw) * d.width * 0.5;
     const dist = Math.hypot(x - midX, z - midZ);
-    const maxRange = d.isExitDoor ? 2.45 : 2.3;
+    const maxRange = d.isExitDoor || d.rooftopTarget ? 2.45 : 2.3;
     if (dist <= maxRange && dist < bestDist) {
       bestDist = dist;
+      const kind: InteriorInteractable['kind'] = d.isExitDoor
+        ? 'building_exit'
+        : d.rooftopTarget
+          ? 'rooftop_exit'
+          : 'interior_door';
+      const label = d.isExitDoor
+        ? d.label
+        : d.rooftopTarget
+          ? `Step Out: ${d.label}`
+          : `${d.isOpen ? 'Close' : 'Open'} ${d.label}`;
       best = {
-        kind: d.isExitDoor ? 'building_exit' : 'interior_door',
+        kind,
         id: d.id,
-        label: d.isExitDoor ? d.label : `${d.isOpen ? 'Close' : 'Open'} ${d.label}`,
+        label,
         distance: dist,
       };
     }

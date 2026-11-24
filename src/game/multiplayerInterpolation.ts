@@ -13,6 +13,9 @@ export interface InterpolatedRemoteAvatar {
   grounded: boolean;
   onStairs: boolean;
   onSeat: boolean;
+  climbingLadder: boolean;
+  turnDeltaYaw: number;
+  photoPose: string | null;
   animState: CharacterAnimState;
   lastEmoteSeq: number;
   activeEmote: EmoteKind | null;
@@ -33,6 +36,9 @@ export function createInterpolatedAvatar(remote: RemotePlayerState): Interpolate
     grounded: remote.grounded ?? remote.movementState !== 'jumping',
     onStairs: remote.onStairs ?? false,
     onSeat: remote.onSeat ?? false,
+    climbingLadder: remote.climbingLadder ?? false,
+    turnDeltaYaw: remote.turnDeltaYaw ?? 0,
+    photoPose: remote.photoPose ?? null,
     animState: remote.animState ?? 'idle',
     lastEmoteSeq: remote.emoteSeq ?? 0,
     activeEmote: remote.emoteKind ?? null,
@@ -81,6 +87,9 @@ export function stepInterpolatedAvatar(
   avatar.grounded = avatar.target.grounded ?? avatar.target.movementState !== 'jumping';
   avatar.onStairs = avatar.target.onStairs ?? false;
   avatar.onSeat = avatar.target.onSeat ?? false;
+  avatar.climbingLadder = avatar.target.climbingLadder ?? false;
+  avatar.turnDeltaYaw = avatar.target.turnDeltaYaw ?? 0;
+  avatar.photoPose = avatar.target.photoPose ?? null;
   if (avatar.target.animState) {
     avatar.animState = avatar.target.animState;
   }
