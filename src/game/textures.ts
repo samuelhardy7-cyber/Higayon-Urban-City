@@ -43,7 +43,7 @@ function finalizeTexture(
 }
 
 export function createCityTextures(maxAnisotropy: number): CityTextures {
-  const aniso = Math.max(1, Math.min(8, maxAnisotropy));
+  const aniso = Math.max(1, Math.min(16, maxAnisotropy));
 
   // 1. Asphalt Road Albedo & Bump (512x512 fine grain)
   const [asphaltCanvas, actx] = makeCanvas(512, 512);

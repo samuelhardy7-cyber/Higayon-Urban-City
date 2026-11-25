@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CITY_LAYOUT,
+  getCityAt,
   getDistrictAt,
   getGroundHeightAt,
+  getSingleBridgeHeight,
   raycastCameraCollision,
   resolveCircleAABBCollision,
 } from './worldData';
@@ -62,4 +64,65 @@ test('camera anti-occlusion raycast pulls camera in front of intervening buildin
   const hit = raycastCameraCollision(ox, oy, oz, tx, ty, tz, CITY_LAYOUT.colliders);
   assert.equal(hit.clipped, true);
   assert.ok(hit.x >= freedomTower.x + freedomTower.width * 0.5, 'camera must stay outside building');
+});
+
+test('connected open-world includes 4 cities, 4 international airports, and drivable suspension bridges', () => {
+  assert.deepEqual(
+    CITY_LAYOUT.cities.map((c) => c.id),
+    ['liberty_metro', 'emerald_bay', 'aero_highland', 'golden_horizon'],
+  );
+  assert.deepEqual(
+    CITY_LAYOUT.airports.map((a) => a.code),
+    ['LBY', 'EMB', 'HLD', 'GZH'],
+  );
+  assert.equal(CITY_LAYOUT.bridges.length, 3);
+
+  assert.equal(getCityAt(0, 0).id, 'liberty_metro');
+  assert.equal(getCityAt(300, 0).id, 'emerald_bay');
+  assert.equal(getCityAt(0, -280).id, 'aero_highland');
+  assert.equal(getCityAt(0, 280).id, 'golden_horizon');
+  assert.equal(getDistrictAt(-63, 283).id, 'suncrest_bay');
+
+  const eastBridge = CITY_LAYOUT.bridges.find((b) => b.id === 'bridge_east_harbor');
+  const northBridge = CITY_LAYOUT.bridges.find((b) => b.id === 'bridge_north_skyway');
+  const southBridge = CITY_LAYOUT.bridges.find((b) => b.id === 'bridge_south_sunset');
+  assert.ok(eastBridge && northBridge && southBridge);
+
+  // Bridge deck rises smoothly from y=0 to deckHeight at mid-span and returns cleanly to y=0
+  assert.equal(getSingleBridgeHeight(eastBridge.start, eastBridge), 0);
+  assert.equal(
+    getSingleBridgeHeight((eastBridge.start + eastBridge.end) * 0.5, eastBridge),
+    eastBridge.deckHeight,
+  );
+  assert.ok(Math.abs(getGroundHeightAt(165, 0) - eastBridge.deckHeight) < 1e-6);
+  assert.ok(Math.abs(getGroundHeightAt(0, -155) - northBridge.deckHeight) < 1e-6);
+  assert.ok(Math.abs(getGroundHeightAt(0, 155) - southBridge.deckHeight) < 1e-6);
+
+  // Verify driving/walking corridor across East Bridge (x=96..234, z=0) is clear of colliders
+  for (let x = 96; x <= 234; x += 6) {
+    const gy = getGroundHeightAt(x, 0);
+    const col = resolveCircleAABBCollision(x, 0, 1.0, gy, 1.78);
+    assert.equal(col.collided, false, `East bridge roadway at x=${x}, z=0 must be clear`);
+  }
+
+  // Verify driving/walking corridor across North Bridge (z=-214..-96, x=0) is clear of colliders
+  for (let z = -214; z <= -96; z += 6) {
+    const gy = getGroundHeightAt(0, z);
+    const col = resolveCircleAABBCollision(0, z, 1.0, gy, 1.78);
+    assert.equal(col.collided, false, `North bridge roadway at x=0, z=${z} must be clear`);
+  }
+
+  // Verify driving/walking corridor across South Bridge (z=96..214, x=0) is clear of colliders
+  for (let z = 96; z <= 214; z += 6) {
+    const gy = getGroundHeightAt(0, z);
+    const col = resolveCircleAABBCollision(0, z, 1.0, gy, 1.78);
+    assert.equal(col.collided, false, `South bridge roadway at x=0, z=${z} must be clear`);
+  }
+
+  // Verify GZH airport west connector roadway (x=-114..-84, z=262) is clear of colliders
+  for (let x = -114; x <= -84; x += 6) {
+    const gy = getGroundHeightAt(x, 262);
+    const col = resolveCircleAABBCollision(x, 262, 1.0, gy, 1.78);
+    assert.equal(col.collided, false, `GZH airport roadway at x=${x}, z=262 must be clear`);
+  }
 });

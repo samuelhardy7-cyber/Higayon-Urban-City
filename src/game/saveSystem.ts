@@ -33,7 +33,16 @@ function getDefaultStorage(): StorageLike | null {
   return null;
 }
 
-const VALID_VEHICLES: VehicleKind[] = ['sedan', 'suv', 'sports', 'pickup', 'motor'];
+const VALID_VEHICLES: VehicleKind[] = [
+  'sedan',
+  'suv',
+  'sports',
+  'pickup',
+  'motor',
+  'jetski',
+  'speedboat',
+  'submarine',
+];
 const VALID_OUTFITS: OutfitId[] = ['street_runner', 'urban_hoodie', 'metro_blazer', 'coast_polo'];
 const VALID_ACCESSORIES: AccessoryId[] = ['none', 'backpack', 'cap', 'shades', 'cap_backpack'];
 const VALID_TIMES: TimeOfDayPhase[] = ['pagi', 'siang', 'sore', 'malam'];
@@ -151,9 +160,9 @@ export function parseSaveData(raw: string): SaveGameData | null {
       Number.isFinite(parsed.playerPos.x) &&
       Number.isFinite(parsed.playerPos.z)
         ? {
-            x: clampNum(parsed.playerPos.x, -98, 118, 0),
-            y: clampNum(parsed.playerPos.y, -1, 15, 0),
-            z: clampNum(parsed.playerPos.z, -98, 98, 16),
+            x: clampNum(parsed.playerPos.x, -235, 515, 0),
+            y: clampNum(parsed.playerPos.y, -16, 95, 0),
+            z: clampNum(parsed.playerPos.z, -375, 375, 16),
             yaw: typeof parsed.playerPos.yaw === 'number' ? parsed.playerPos.yaw : 0,
           }
         : undefined;

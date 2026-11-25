@@ -15,7 +15,7 @@ import { PLAYER_HEIGHT, PLAYER_RADIUS } from './playerPhysics.ts';
 import type { BuildingCategory } from './types.ts';
 import { CITY_LAYOUT } from './worldData.ts';
 
-test('CITY_LAYOUT.entrances covers all 4 categories and all 12 building subtypes without decorative skyline doors', () => {
+test('CITY_LAYOUT.entrances covers 100% of buildings and houses across all categories and subtypes', () => {
   const categories = new Set<BuildingCategory>(CITY_LAYOUT.entrances.map((e) => e.category));
   assert.deepEqual(
     [...categories].sort(),
@@ -27,10 +27,17 @@ test('CITY_LAYOUT.entrances covers all 4 categories and all 12 building subtypes
     assert.ok(subtypes.has(st), `Expected CITY_LAYOUT.entrances to include subtype "${st}"`);
   }
 
-  for (const ent of CITY_LAYOUT.entrances) {
+  const enteredIds = new Set(CITY_LAYOUT.entrances.map((e) => e.buildingId));
+  for (const bld of CITY_LAYOUT.buildings) {
     assert.ok(
-      !ent.buildingId.startsWith('dt_fin_'),
-      `Decorative skyline building ${ent.buildingId} must not have an entrance`,
+      enteredIds.has(bld.id),
+      `Building "${bld.id}" must have an interactive entrance in CITY_LAYOUT.entrances`,
+    );
+  }
+  for (const house of CITY_LAYOUT.houses) {
+    assert.ok(
+      enteredIds.has(house.id),
+      `House "${house.id}" must have an interactive entrance in CITY_LAYOUT.entrances`,
     );
   }
 });
@@ -311,4 +318,33 @@ test('raycastInteriorCamera clamps indoor camera strictly within room bounds and
   assert.ok(cam.x <= bp.bounds.maxX - 0.31);
   assert.ok(cam.z <= bp.bounds.maxZ - 0.31);
   assert.ok(cam.y <= floorInfo.ceilingY - 0.29);
+});
+
+test('all 4 airport terminals create boarding desk interiors with board_flight interactables and c4_golden_spire reaches 22F rooftop', () => {
+  const terminalIds = [
+    'airport_liberty_terminal',
+    'airport_emerald_terminal',
+    'airport_highland_terminal',
+    'airport_golden_terminal',
+  ];
+  for (const bid of terminalIds) {
+    const ent = CITY_LAYOUT.entrances.find((e) => e.buildingId === bid);
+    assert.ok(ent, `Expected entrance for ${bid}`);
+    assert.equal(ent.subtype, 'airport_terminal');
+    const bp = createInteriorBlueprintForEntrance(ent);
+    const doors = createInteriorDoorStates(bp);
+    const desk = bp.furniture.find((f) => f.kind === 'boarding_desk');
+    assert.ok(desk, `${bid} interior must include a boarding_desk`);
+
+    const deskMidX = desk.x;
+    const deskNearZ = desk.z + desk.depth * 0.5 + 0.85;
+    const interact = findNearestInteriorInteractable(deskMidX, 0, deskNearZ, bp, doors, 1);
+    assert.equal(interact?.kind, 'board_flight', `${bid} boarding desk must yield board_flight prompt`);
+  }
+
+  const spireEnt = CITY_LAYOUT.entrances.find((e) => e.buildingId === 'c4_golden_spire');
+  assert.ok(spireEnt);
+  const spireBp = createInteriorBlueprintForEntrance(spireEnt);
+  assert.equal(spireBp.floorsCount, 22);
+  assert.equal(spireBp.elevators[0]?.floors.length, 22);
 });

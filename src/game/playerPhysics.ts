@@ -1,11 +1,18 @@
 import { findRooftopAt, findVaultableObstacleAhead } from './rooftopSystem';
 import type { CityLayout, InputState, PlayerState } from './types';
-import { CITY_LAYOUT, getGroundHeightAt, resolveCircleAABBCollision } from './worldData';
+import {
+  CITY_LAYOUT,
+  getGroundHeightAt,
+  getWaterInfoAt,
+  resolveCircleAABBCollision,
+} from './worldData';
 
 export const PLAYER_RADIUS = 0.42;
 export const PLAYER_HEIGHT = 1.78;
 export const WALK_SPEED = 5.4;
 export const SPRINT_SPEED = 9.4;
+export const SWIM_SPEED = 4.1;
+export const SWIM_FAST_SPEED = 6.6;
 export const JUMP_VELOCITY = 8.4;
 export const GRAVITY = -22.0;
 export const COYOTE_TIME = 0.11;
@@ -40,6 +47,9 @@ export function createInitialPlayerState(layout: CityLayout = CITY_LAYOUT): Play
     activeLadderId: null,
     parkourTimer: 0,
     activeRooftopId: null,
+    inWater: false,
+    isUnderwater: false,
+    waterDepth: 0,
   };
 }
 
@@ -52,6 +62,7 @@ export function createEmptyInput(): InputState {
     sprint: false,
     jumpHeld: false,
     jumpJustPressed: false,
+    diveHeld: false,
     moveX: 0,
     moveY: 0,
   };
@@ -114,6 +125,134 @@ export function stepPlayerPhysics(
     const regenRate = hasMoveInput ? 14 : 24;
     state.stamina = Math.min(100, state.stamina + regenRate * dt);
   }
+
+  const waterNow = getWaterInfoAt(state.x, state.z, state.y, layout);
+  const shouldSwim =
+    waterNow.inWater &&
+    waterNow.depth > 1.32 &&
+    (state.y <= waterNow.waterSurfaceY - 0.18 || Boolean(state.inWater));
+
+  if (shouldSwim) {
+    // 3D Buoyant Ocean Swimming & Underwater Diving
+    state.inWater = true;
+    state.grounded = false;
+    state.coyoteTimer = 0;
+    state.jumpBufferTimer = 0;
+    state.activeRooftopId = null;
+
+    const targetSwimSpeed = hasMoveInput
+      ? (state.isSprinting ? SWIM_FAST_SPEED : SWIM_SPEED) * Math.min(1, axisMag)
+      : 0;
+    const targetVx = normWishX * targetSwimSpeed;
+    const targetVz = normWishZ * targetSwimSpeed;
+    state.vx = dampValue(state.vx, targetVx, hasMoveInput ? 7.5 : 5.5, dt);
+    state.vz = dampValue(state.vz, targetVz, hasMoveInput ? 7.5 : 5.5, dt);
+
+    // Smoothly turn character toward swim velocity
+    const prevYaw = state.yaw;
+    if (hasMoveInput) {
+      const targetYaw = Math.atan2(-normWishX, -normWishZ);
+      const angleDiff = shortestAngleDelta(state.yaw, targetYaw);
+      state.yaw += angleDiff * (1 - Math.exp(-9 * dt));
+    }
+    state.turnRate = dt > 1e-5 ? shortestAngleDelta(prevYaw, state.yaw) / dt : 0;
+
+    // Vertical swimming controls (non-inverted: jumpHeld ascends +Y, diveHeld descends -Y)
+    const ascendHeld = input.jumpHeld;
+    const diveHeld = Boolean(input.diveHeld);
+    const surfaceFloatY = waterNow.waterSurfaceY - 1.24;
+    const minSwimY = waterNow.seabedY + 0.08;
+
+    if (ascendHeld && !diveHeld) {
+      // Allow climbing/hopping onto low piers or sloped beach when near surface
+      const targetAscendVy = state.y >= surfaceFloatY - 0.15 ? 4.4 : 4.1;
+      state.vy = dampValue(state.vy, targetAscendVy, 8, dt);
+    } else if (diveHeld && !ascendHeld) {
+      state.vy = dampValue(state.vy, -4.3, 8, dt);
+    } else if (state.y > surfaceFloatY - 0.28) {
+      // Gentle surface buoyancy tread-water equilibrium
+      const bobOffset = Math.sin(state.elapsedTime * 2.4) * 0.04;
+      const errY = surfaceFloatY + bobOffset - state.y;
+      state.vy = dampValue(state.vy, errY * 3.2, 7, dt);
+    } else {
+      // Neutral underwater hover so diver stays at chosen coral/reef depth
+      state.vy = dampValue(state.vy, 0, 7.5, dt);
+    }
+
+    // Horizontal swim integration & collider resolution
+    const nextX = state.x + state.vx * dt;
+    const nextZ = state.z + state.vz * dt;
+    const resolved = resolveCircleAABBCollision(
+      nextX,
+      nextZ,
+      PLAYER_RADIUS,
+      state.y,
+      PLAYER_HEIGHT,
+      layout,
+    );
+    const actualDx = resolved.x - state.x;
+    const actualDz = resolved.z - state.z;
+    state.x = resolved.x;
+    state.z = resolved.z;
+    if (resolved.collided && dt > 1e-5) {
+      state.vx = actualDx / dt;
+      state.vz = actualDz / dt;
+    }
+
+    // Vertical integration & seabed / surface cap
+    const nextWater = getWaterInfoAt(state.x, state.z, state.y, layout);
+    const nextSeabedY = Math.max(nextWater.seabedY, getGroundHeightAt(state.x, state.z, layout, state.y));
+    state.y += state.vy * dt;
+
+    if (state.y < nextSeabedY) {
+      state.y = nextSeabedY;
+      state.vy = Math.max(0, state.vy);
+    }
+    const maxWaterHeadY = nextWater.inWater ? nextWater.waterSurfaceY - 0.35 : nextSeabedY + 2.5;
+    if (nextWater.inWater && !ascendHeld && state.y > maxWaterHeadY) {
+      state.y = maxWaterHeadY;
+      state.vy = Math.min(0, state.vy);
+    } else if (nextWater.inWater && ascendHeld && state.y > nextWater.waterSurfaceY - 0.85) {
+      // Gently cap max hop at surface unless moving onto land/pier
+      const aheadWater = getWaterInfoAt(
+        state.x + normWishX * 0.75,
+        state.z + normWishZ * 0.75,
+        state.y,
+        layout,
+      );
+      if (aheadWater.inWater && aheadWater.depth > 1.2) {
+        state.y = Math.min(state.y, nextWater.waterSurfaceY - 0.85);
+        if (state.vy > 0.6) state.vy = 0.6;
+      }
+    }
+
+    // Transition smoothly back to dry land if wading onto beach/pier
+    if (!nextWater.inWater || nextWater.depth <= 1.05) {
+      const dryGroundY = getGroundHeightAt(state.x, state.z, layout, state.y);
+      if (state.y <= dryGroundY + 0.35) {
+        state.y = dryGroundY;
+        state.vy = 0;
+        state.grounded = true;
+        state.inWater = false;
+      }
+    }
+
+    state.waterDepth = Math.max(0, nextWater.waterSurfaceY - state.y);
+    state.isUnderwater = Boolean(state.inWater) && state.y < nextWater.waterSurfaceY - 1.48;
+
+    const stepDist = Math.hypot(actualDx, actualDz);
+    state.speed = dt > 1e-5 ? stepDist / dt : 0;
+    state.isMoving = state.speed > 0.25 || Math.abs(state.vy) > 0.4;
+    state.distanceWalked += stepDist;
+    state.gaitPhase += Math.max(stepDist * 1.9, (state.isMoving ? 2.4 : 0.85) * dt);
+    state.squashY = dampValue(state.squashY, 1, 14, dt);
+
+    return { jumped: false, landed: false, vaulted: false };
+  }
+
+  state.inWater = false;
+  state.isUnderwater = false;
+  state.waterDepth = waterNow.inWater ? Math.max(0, waterNow.waterSurfaceY - state.y) : 0;
 
   const targetSpeed = hasMoveInput
     ? (state.isSprinting ? SPRINT_SPEED : WALK_SPEED) * Math.min(1, axisMag)

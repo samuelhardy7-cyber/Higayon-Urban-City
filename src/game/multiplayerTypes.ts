@@ -15,7 +15,15 @@ export interface AuthUserProfile {
 
 export type SessionStatus = 'waiting' | 'active' | 'paused' | 'ended';
 
-export type PlayerMovementState = 'idle' | 'walking' | 'running' | 'jumping' | 'driving';
+export type PlayerMovementState =
+  | 'idle'
+  | 'walking'
+  | 'running'
+  | 'jumping'
+  | 'driving'
+  | 'flying'
+  | 'swimming'
+  | 'diving';
 
 export type PlayerConnectionStatus = 'online' | 'reconnecting' | 'offline';
 
@@ -203,7 +211,9 @@ export interface TeacherPinStatus {
 export type ClientWsMessage =
   | {
       type: 'auth:join';
-      token: string;
+      token?: string;
+      guestId?: string;
+      displayName?: string;
       joinCode: string;
       avatar: CharacterCustomization;
     }

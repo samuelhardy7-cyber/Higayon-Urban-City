@@ -1,9 +1,13 @@
 import type {
+  AirportSpec,
   BenchSpec,
   BlockZone,
+  BridgeSpec,
   BuildingEntranceSpec,
   BuildingSpec,
+  CityId,
   CityLayout,
+  CityZoneSpec,
   ColliderBox,
   ContainerSpec,
   DistrictId,
@@ -25,6 +29,11 @@ export const DISTRICT_LABELS: Record<DistrictId, string> = {
   industrial: 'Industrial & Port',
   coastal: 'Coastal Beachfront',
   avenue: 'City Avenue',
+  bay_marina: 'Emerald Marina Bay',
+  highland_tech: 'Aero Highland Campus',
+  suncrest_bay: 'Golden Sunset Coast',
+  airport: 'International Airport',
+  bridge: 'Grand Skyway Crossing',
 };
 
 const ROAD_CENTERS = [-84, -42, 0, 42, 84];
@@ -33,6 +42,9 @@ const SIDEWALK_WIDTH = 3;
 const SIDEWALK_HEIGHT = 0.14;
 const BLOCK_CENTERS = [-63, -21, 21, 63];
 const BLOCK_OUTER_SIZE = 32;
+
+export const WATER_SURFACE_Y = -0.38;
+export const OCEAN_SEABED_Y = -13.5;
 
 function pushCollider(
   colliders: ColliderBox[],
@@ -315,13 +327,17 @@ function createCityLayout(): CityLayout {
       } else if (cfg.type === 'downtown_parking') {
         // Financial Tower + Open Multi-Bay Parking Lot
         const isLeft = bx < 0;
+        const finId = `dt_fin_${ix}_${iz}`;
+        const finX = isLeft ? bx - 5.8 : bx + 5.8;
+        const finZ = bz - 2.0;
+        const finH = isLeft ? 34 : 29;
         buildings.push({
-          id: `dt_fin_${ix}_${iz}`,
-          x: isLeft ? bx - 5.8 : bx + 5.8,
-          z: bz - 2.0,
+          id: finId,
+          x: finX,
+          z: finZ,
           width: 11.5,
           depth: 17.0,
-          height: isLeft ? 34 : 29,
+          height: finH,
           style: 'skyscraper',
           primaryColor: isLeft ? 0xc2cfd9 : 0xd3cec4,
           accentColor: 0x345570,
@@ -329,16 +345,31 @@ function createCityLayout(): CityLayout {
         });
         pushCollider(
           colliders,
-          `dt_fin_${ix}_${iz}`,
-          isLeft ? bx - 5.8 : bx + 5.8,
-          bz - 2.0,
+          finId,
+          finX,
+          finZ,
           11.5,
           17.0,
           SIDEWALK_HEIGHT,
-          SIDEWALK_HEIGHT + (isLeft ? 34 : 29),
+          SIDEWALK_HEIGHT + finH,
           'building',
           true,
         );
+        entrances.push({
+          id: `ent_${finId}`,
+          buildingId: finId,
+          name: isLeft ? 'Meridian Finance Tower' : 'Vanguard Capital Plaza',
+          category: 'business',
+          subtype: isLeft ? 'corporate' : 'office',
+          doorX: finX,
+          doorY: SIDEWALK_HEIGHT,
+          doorZ: finZ + 8.5,
+          yaw: 0,
+          width: 2.1,
+          height: 2.7,
+          doorStyle: 'glass_double',
+          accentColor: 0x345570,
+        });
 
         // Open parking lot side with parked cars
         const lotX = isLeft ? bx + 6.5 : bx - 6.5;
@@ -1332,6 +1363,16 @@ function createCityLayout(): CityLayout {
         { x: 93.8, z: 4.0 },
       ],
     },
+    // Coastal Restaurants & Beach Promenade loop
+    {
+      id: 'loop_coastal_prom',
+      points: [
+        { x: 89.8, z: 8.0 },
+        { x: 89.8, z: 78.0 },
+        { x: 93.8, z: 78.0 },
+        { x: 93.8, z: 8.0 },
+      ],
+    },
     {
       id: 'loop_coastal_bistro',
       points: [
@@ -1343,13 +1384,1637 @@ function createCityLayout(): CityLayout {
     },
   ];
 
+  // =========================================================================
+  // MULTI-CITY EXPANSION: BRIDGES, 3 INTERNATIONAL AIRPORTS, CITY 2 & CITY 3
+  // =========================================================================
+
+  const cities: CityZoneSpec[] = [
+    {
+      id: 'liberty_metro',
+      name: 'Liberty Metro',
+      shortName: 'Liberty',
+      tagline: 'Downtown Skyline, Coastal Pier & International Hub',
+      centerX: 0,
+      centerZ: 0,
+      landMinX: -95,
+      landMaxX: 95,
+      landMinZ: -95,
+      landMaxZ: 95,
+      roadCentersX: [-84, -42, 0, 42, 84],
+      roadCentersZ: [-84, -42, 0, 42, 84],
+      accentColor: '#f59e0b',
+    },
+    {
+      id: 'emerald_bay',
+      name: 'Emerald Bay',
+      shortName: 'Emerald Bay',
+      tagline: 'Eastern Harbor Bridge, Nusantara Marina & Coastal Villas',
+      centerX: 305,
+      centerZ: 0,
+      landMinX: 233,
+      landMaxX: 382,
+      landMinZ: -95,
+      landMaxZ: 95,
+      roadCentersX: [242, 284, 326, 368],
+      roadCentersZ: [-84, -42, 0, 42, 84],
+      accentColor: '#10b981',
+    },
+    {
+      id: 'aero_highland',
+      name: 'Aero Highland',
+      shortName: 'Highland',
+      tagline: 'Northern Skyway, Observatory Campus & Eco-Highlands',
+      centerX: 0,
+      centerZ: -283,
+      landMinX: -95,
+      landMaxX: 95,
+      landMinZ: -358,
+      landMaxZ: -210,
+      roadCentersX: [-84, -42, 0, 42, 84],
+      roadCentersZ: [-346, -304, -262, -220],
+      accentColor: '#38bdf8',
+    },
+    {
+      id: 'golden_horizon',
+      name: 'Golden Horizon',
+      shortName: 'Golden Bay',
+      tagline: 'Southern Sunset Bridge, Golden Spire & Coastal Promenade',
+      centerX: 0,
+      centerZ: 283,
+      landMinX: -95,
+      landMaxX: 95,
+      landMinZ: 210,
+      landMaxZ: 358,
+      roadCentersX: [-84, -42, 0, 42, 84],
+      roadCentersZ: [220, 262, 304, 346],
+      accentColor: '#eab308',
+    },
+  ];
+
+  const bridges: BridgeSpec[] = [
+    {
+      id: 'bridge_east_harbor',
+      name: 'Grand Harbor Suspension Bridge',
+      axis: 'x',
+      start: 95,
+      end: 235,
+      crossCenter: 0,
+      roadWidth: 10,
+      sidewalkWidth: 2,
+      rampLength: 28,
+      deckHeight: 5.5,
+      towerPositions: [128, 202],
+      cableColor: 0x38bdf8,
+    },
+    {
+      id: 'bridge_north_skyway',
+      name: 'Northern Aero Skyway Bridge',
+      axis: 'z',
+      start: -215,
+      end: -95,
+      crossCenter: 0,
+      roadWidth: 10,
+      sidewalkWidth: 2,
+      rampLength: 26,
+      deckHeight: 4.5,
+      towerPositions: [-180, -130],
+      cableColor: 0xf59e0b,
+    },
+    {
+      id: 'bridge_south_sunset',
+      name: 'Golden Sunset Cable Bridge',
+      axis: 'z',
+      start: 95,
+      end: 215,
+      crossCenter: 0,
+      roadWidth: 10,
+      sidewalkWidth: 2,
+      rampLength: 26,
+      deckHeight: 5.0,
+      towerPositions: [128, 182],
+      cableColor: 0xf97316,
+    },
+  ];
+
+  // Bridge side guardrails so players & vehicles cross safely above the sea
+  pushCollider(colliders, 'bridge_eh_rail_n', 165, -7.25, 140, 0.5, 0, 9.5, 'barrier', false);
+  pushCollider(colliders, 'bridge_eh_rail_s', 165, 7.25, 140, 0.5, 0, 9.5, 'barrier', false);
+  pushCollider(colliders, 'bridge_ns_rail_w', -7.25, -155, 0.5, 120, 0, 8.5, 'barrier', false);
+  pushCollider(colliders, 'bridge_ns_rail_e', 7.25, -155, 0.5, 120, 0, 8.5, 'barrier', false);
+  pushCollider(colliders, 'bridge_ls_rail_w', -7.25, 155, 0.5, 120, 0, 9.0, 'barrier', false);
+  pushCollider(colliders, 'bridge_ls_rail_e', 7.25, 155, 0.5, 120, 0, 9.0, 'barrier', false);
+
+  // Bridge streetlamps
+  for (let bx = 104; bx <= 226; bx += 24) {
+    const by = getSingleBridgeHeight(bx, bridges[0]) + SIDEWALK_HEIGHT;
+    lamps.push({ x: bx, y: by, z: -6.1, rotY: 0 });
+    lamps.push({ x: bx, y: by, z: 6.1, rotY: Math.PI });
+  }
+  for (let bz = -205; bz <= -105; bz += 24) {
+    const by = getSingleBridgeHeight(bz, bridges[1]) + SIDEWALK_HEIGHT;
+    lamps.push({ x: -6.1, y: by, z: bz, rotY: Math.PI * 0.5 });
+    lamps.push({ x: 6.1, y: by, z: bz, rotY: -Math.PI * 0.5 });
+  }
+  for (let bz = 105; bz <= 205; bz += 24) {
+    const by = getSingleBridgeHeight(bz, bridges[2]) + SIDEWALK_HEIGHT;
+    lamps.push({ x: -6.1, y: by, z: bz, rotY: Math.PI * 0.5 });
+    lamps.push({ x: 6.1, y: by, z: bz, rotY: -Math.PI * 0.5 });
+  }
+
+  // Shared helper to add a 100%-enterable building in any city
+  const addCityBuilding = (
+    spec: BuildingSpec,
+    ent: {
+      name: string;
+      category: BuildingEntranceSpec['category'];
+      subtype: BuildingEntranceSpec['subtype'];
+      doorSide?: 'south' | 'north' | 'west' | 'east';
+      doorStyle?: BuildingEntranceSpec['doorStyle'];
+    },
+  ) => {
+    buildings.push(spec);
+    pushCollider(
+      colliders,
+      spec.id,
+      spec.x,
+      spec.z,
+      spec.width,
+      spec.depth,
+      SIDEWALK_HEIGHT,
+      SIDEWALK_HEIGHT + spec.height,
+      'building',
+      true,
+    );
+    const side = ent.doorSide ?? 'south';
+    let doorX = spec.x;
+    let doorZ = spec.z + spec.depth * 0.5;
+    let yaw = 0;
+    if (side === 'north') {
+      doorZ = spec.z - spec.depth * 0.5;
+      yaw = Math.PI;
+    } else if (side === 'west') {
+      doorX = spec.x - spec.width * 0.5;
+      doorZ = spec.z;
+      yaw = -Math.PI * 0.5;
+    } else if (side === 'east') {
+      doorX = spec.x + spec.width * 0.5;
+      doorZ = spec.z;
+      yaw = Math.PI * 0.5;
+    }
+    entrances.push({
+      id: `ent_${spec.id}`,
+      buildingId: spec.id,
+      name: ent.name,
+      category: ent.category,
+      subtype: ent.subtype,
+      doorX,
+      doorY: SIDEWALK_HEIGHT,
+      doorZ,
+      yaw,
+      width: 2.0,
+      height: 2.6,
+      doorStyle:
+        ent.doorStyle ??
+        (ent.category === 'industrial'
+          ? 'industrial'
+          : ent.category === 'commercial'
+            ? 'storefront'
+            : 'glass_double'),
+      accentColor: spec.accentColor,
+    });
+  };
+
+  // Helper to add a 4-house residential block
+  const addResidentialHouseQuad = (
+    prefix: string,
+    bx: number,
+    bz: number,
+    cityTag: string,
+    wallPalette: number[],
+    roofPalette: number[],
+  ) => {
+    const subOffsets: Array<[number, number, number]> = [
+      [-6.2, -6.2, 0],
+      [6.2, -6.2, 0],
+      [-6.2, 6.2, Math.PI],
+      [6.2, 6.2, Math.PI],
+    ];
+    subOffsets.forEach(([ox, oz, facing], hIdx) => {
+      const cIdx = (Math.abs(Math.round(bx + bz)) + hIdx) % wallPalette.length;
+      const isModern = hIdx % 2 === 1;
+      const wh = isModern ? 4.8 : 4.2;
+      const houseId = `${prefix}_h_${hIdx}`;
+      const hx = bx + ox;
+      const hz = bz + oz;
+      houses.push({
+        id: houseId,
+        x: hx,
+        z: hz,
+        width: 7.4,
+        depth: 6.8,
+        wallHeight: wh,
+        roofHeight: 2.35,
+        facing,
+        wallColor: wallPalette[cIdx],
+        roofColor: roofPalette[cIdx],
+        trimColor: 0xf4f1ea,
+      });
+      pushCollider(
+        colliders,
+        houseId,
+        hx,
+        hz,
+        7.4,
+        6.8,
+        SIDEWALK_HEIGHT,
+        SIDEWALK_HEIGHT + wh + 2.35,
+        'house',
+        true,
+      );
+      const outwardYaw = facing === 0 ? Math.PI : 0;
+      const doorZOffset = facing === 0 ? -3.4 : 3.4;
+      entrances.push({
+        id: `ent_${houseId}`,
+        buildingId: houseId,
+        name: isModern ? `${cityTag} Modern Villa` : `${cityTag} Cottage Home`,
+        category: 'residential',
+        subtype: isModern ? 'modern_house' : 'small_house',
+        doorX: hx,
+        doorY: SIDEWALK_HEIGHT,
+        doorZ: hz + doorZOffset,
+        yaw: outwardYaw,
+        width: 1.1,
+        height: 2.25,
+        doorStyle: 'wood',
+        accentColor: roofPalette[cIdx],
+      });
+    });
+    trees.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz, scale: 1.04, tint: 0x3f844c, kind: 'deciduous' });
+    pushCollider(colliders, `${prefix}_tree`, bx, bz, 0.9, 0.9, 0, 4.8, 'prop', false);
+  };
+
+  // =========================================================================
+  // CITY 2: EMERALD BAY (X: 242..368, Z: -84..84)
+  // =========================================================================
+  const c2BlockX = [263, 305, 347];
+  const c2BlockZ = [-63, -21, 21, 63];
+  for (let ix = 0; ix < c2BlockX.length; ix++) {
+    for (let iz = 0; iz < c2BlockZ.length; iz++) {
+      const bx = c2BlockX[ix];
+      const bz = c2BlockZ[iz];
+      let bType: BlockZone['type'] = 'residential_houses';
+      let dist: DistrictId = 'bay_marina';
+      if (bx === 305 && bz === 21) bType = 'residential_park';
+      else if (bx === 263 && bz === -21) bType = 'downtown_mall';
+      else if (bx === 305 && bz === -21) bType = 'downtown_tower';
+      else if (bx === 305 && bz === -63) bType = 'downtown_parking';
+      else if (bx === 263 && bz === 21) bType = 'coastal_restaurants';
+      else if (bx === 263 && bz === 63) bType = 'residential_apartments';
+      else if (bx === 347 && bz === -63) {
+        bType = 'industrial_factory';
+        dist = 'industrial';
+      } else if (bx === 347 && bz === -21) {
+        bType = 'industrial_port';
+        dist = 'industrial';
+      } else if (bx === 347 && bz === 21) {
+        bType = 'coastal_resort';
+      }
+
+      blocks.push({
+        id: `c2_blk_${ix}_${iz}`,
+        cx: bx,
+        cz: bz,
+        size: BLOCK_OUTER_SIZE,
+        type: bType,
+        district: dist,
+        label: DISTRICT_LABELS[dist],
+        cityId: 'emerald_bay',
+      });
+
+      const lampOff = BLOCK_OUTER_SIZE * 0.5 - 1.1;
+      for (const [lx, lz, rY] of [
+        [bx - lampOff, bz - lampOff, Math.PI * 0.25],
+        [bx + lampOff, bz + lampOff, -Math.PI * 0.75],
+      ] as Array<[number, number, number]>) {
+        lamps.push({ x: lx, y: SIDEWALK_HEIGHT, z: lz, rotY: rY });
+        pushCollider(colliders, `c2_lamp_${lx}_${lz}`, lx, lz, 0.4, 0.4, 0, 5.0, 'prop', false);
+      }
+
+      if (bx === 263 && bz === -21) {
+        addCityBuilding(
+          {
+            id: 'c2_marina_mall',
+            x: bx,
+            z: bz - 3.5,
+            width: 21,
+            depth: 13.5,
+            height: 11.0,
+            style: 'mall',
+            primaryColor: 0xe6efe9,
+            accentColor: 0x0f766e,
+            hasAwning: true,
+          },
+          { name: 'Marina Harbor Mall', category: 'commercial', subtype: 'mall', doorStyle: 'glass_double' },
+        );
+        addParkedVehicle(parkedVehicles, colliders, 'c2_mall_car1', bx - 5.5, SIDEWALK_HEIGHT, bz + 7.5, 0, 'sedan', 0x0ea5e9);
+        addParkedVehicle(parkedVehicles, colliders, 'c2_mall_car2', bx + 4.5, SIDEWALK_HEIGHT, bz + 7.5, 0, 'suv', 0xf59e0b);
+      } else if (bx === 305 && bz === -21) {
+        addCityBuilding(
+          {
+            id: 'c2_emerald_tower',
+            x: bx - 4.0,
+            z: bz - 4.0,
+            width: 13.5,
+            depth: 13.5,
+            height: 44,
+            style: 'skyscraper',
+            primaryColor: 0xd5ebe6,
+            accentColor: 0x0d9488,
+            hasSpire: true,
+          },
+          { name: 'Emerald Sky Tower', category: 'business', subtype: 'corporate', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c2_marina_offices',
+            x: bx + 8.0,
+            z: bz - 5.0,
+            width: 8.5,
+            depth: 11.0,
+            height: 20,
+            style: 'office',
+            primaryColor: 0xcbd5e1,
+            accentColor: 0x0f766e,
+          },
+          { name: 'Marina Innovation Offices', category: 'business', subtype: 'office', doorStyle: 'glass_double' },
+        );
+        fountains.push({ x: bx + 6.5, y: SIDEWALK_HEIGHT, z: bz + 6.5, radius: 2.8 });
+        pushCollider(colliders, 'c2_tower_fount', bx + 6.5, bz + 6.5, 5.6, 5.6, SIDEWALK_HEIGHT, SIDEWALK_HEIGHT + 1.1, 'prop', false);
+      } else if (bx === 305 && bz === -63) {
+        addCityBuilding(
+          {
+            id: 'c2_bayview_tech',
+            x: bx - 5.2,
+            z: bz - 2.5,
+            width: 12.5,
+            depth: 14.5,
+            height: 24,
+            style: 'office',
+            primaryColor: 0xd0e2ea,
+            accentColor: 0x0284c7,
+            hasSetback: true,
+          },
+          { name: 'Bayview Tech Center', category: 'business', subtype: 'office', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c2_coral_espresso',
+            x: bx + 7.2,
+            z: bz + 4.5,
+            width: 8.8,
+            depth: 9.2,
+            height: 5.5,
+            style: 'restaurant',
+            primaryColor: 0xf1e4d4,
+            accentColor: 0xd97706,
+            hasAwning: true,
+          },
+          { name: 'Coral Espresso Roasters', category: 'commercial', subtype: 'cafe', doorStyle: 'storefront' },
+        );
+      } else if (bx === 263 && bz === 21) {
+        addCityBuilding(
+          {
+            id: 'c2_bay_mart',
+            x: bx - 6.2,
+            z: bz - 3.5,
+            width: 9.2,
+            depth: 10.5,
+            height: 5.2,
+            style: 'store',
+            primaryColor: 0xf4f1ea,
+            accentColor: 0x10b981,
+            hasAwning: true,
+          },
+          { name: 'Bay Mart Groceries', category: 'commercial', subtype: 'convenience_store', doorStyle: 'storefront' },
+        );
+        addCityBuilding(
+          {
+            id: 'c2_nusantara_bistro',
+            x: bx + 5.8,
+            z: bz + 3.5,
+            width: 11.5,
+            depth: 11.0,
+            height: 6.5,
+            style: 'restaurant',
+            primaryColor: 0xf0e1ce,
+            accentColor: 0x0d9488,
+            hasAwning: true,
+          },
+          { name: 'Nusantara Seafood Bistro', category: 'commercial', subtype: 'restaurant', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 305 && bz === 21) {
+        // Emerald Lagoon Park
+        fountains.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz, radius: 3.4 });
+        pushCollider(colliders, 'c2_lagoon_fount', bx, bz, 6.8, 6.8, SIDEWALK_HEIGHT, SIDEWALK_HEIGHT + 1.1, 'prop', false);
+        benches.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz + 6.2, rotY: Math.PI });
+        benches.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz - 6.2, rotY: 0 });
+        pushCollider(colliders, 'c2_park_b1', bx, bz + 6.2, 2.1, 0.75, 0, 0.9, 'prop', false);
+        pushCollider(colliders, 'c2_park_b2', bx, bz - 6.2, 2.1, 0.75, 0, 0.9, 'prop', false);
+        for (const [tx, tz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]]) {
+          trees.push({ x: bx + tx, y: SIDEWALK_HEIGHT, z: bz + tz, scale: 1.08, tint: 0x3b8c52, kind: 'palm' });
+          pushCollider(colliders, `c2_pt_${tx}_${tz}`, bx + tx, bz + tz, 0.8, 0.8, 0, 5.0, 'prop', false);
+        }
+      } else if (bx === 263 && bz === 63) {
+        addCityBuilding(
+          {
+            id: 'c2_lagoon_apt_a',
+            x: bx - 5.2,
+            z: bz - 3.5,
+            width: 11.2,
+            depth: 13.0,
+            height: 15.0,
+            style: 'apartment',
+            primaryColor: 0xdbe9e6,
+            accentColor: 0x0f766e,
+            hasAwning: true,
+          },
+          { name: 'Emerald Lagoon Residence', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c2_lagoon_apt_b',
+            x: bx + 6.5,
+            z: bz + 4.5,
+            width: 9.8,
+            depth: 11.2,
+            height: 12.2,
+            style: 'apartment',
+            primaryColor: 0xe2dfd5,
+            accentColor: 0x3b6e66,
+          },
+          { name: 'Coral Bay Suites', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 347 && bz === -63) {
+        addCityBuilding(
+          {
+            id: 'c2_solar_plant',
+            x: bx - 4.8,
+            z: bz - 3.5,
+            width: 13.2,
+            depth: 14.5,
+            height: 9.2,
+            style: 'factory',
+            primaryColor: 0x879199,
+            accentColor: 0x0d9488,
+          },
+          { name: 'Solar Marine Plant', category: 'industrial', subtype: 'factory', doorStyle: 'industrial' },
+        );
+        addCityBuilding(
+          {
+            id: 'c2_harbor_depot',
+            x: bx + 6.8,
+            z: bz + 3.5,
+            width: 9.4,
+            depth: 13.5,
+            height: 7.4,
+            style: 'warehouse',
+            primaryColor: 0x6f7b85,
+            accentColor: 0x3b4854,
+          },
+          { name: 'Bay Freight Depot', category: 'industrial', subtype: 'warehouse', doorStyle: 'industrial' },
+        );
+      } else if (bx === 347 && bz === -21) {
+        addCityBuilding(
+          {
+            id: 'c2_marine_workshop',
+            x: bx - 5.2,
+            z: bz - 3.5,
+            width: 11.0,
+            depth: 13.0,
+            height: 8.0,
+            style: 'workshop',
+            primaryColor: 0x707b84,
+            accentColor: 0xd97706,
+          },
+          { name: 'Bay Marine Auto Workshop', category: 'industrial', subtype: 'workshop', doorStyle: 'industrial' },
+        );
+        containers.push({ id: 'c2_cont_1', x: bx + 6.2, y: SIDEWALK_HEIGHT, z: bz - 4.5, rotY: 0, color: 0x0d9488 });
+        pushCollider(colliders, 'c2_cont_1', bx + 6.2, bz - 4.5, 2.5, 6.0, SIDEWALK_HEIGHT, SIDEWALK_HEIGHT + 2.6, 'container', true);
+      } else if (bx === 347 && bz === 21) {
+        addCityBuilding(
+          {
+            id: 'c2_coastline_coffee',
+            x: bx - 5.5,
+            z: bz - 3.5,
+            width: 10.2,
+            depth: 10.2,
+            height: 5.8,
+            style: 'restaurant',
+            primaryColor: 0xefe2d0,
+            accentColor: 0x059669,
+            hasAwning: true,
+          },
+          { name: 'Coastline Coffee Pavilion', category: 'commercial', subtype: 'cafe', doorStyle: 'storefront' },
+        );
+        addCityBuilding(
+          {
+            id: 'c2_marina_suites',
+            x: bx + 6.0,
+            z: bz + 4.0,
+            width: 10.0,
+            depth: 11.5,
+            height: 12.8,
+            style: 'apartment',
+            primaryColor: 0xd5e3e0,
+            accentColor: 0x1e6b63,
+          },
+          { name: 'Marina Terrace Flats', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+      } else {
+        addResidentialHouseQuad(
+          `c2_${ix}_${iz}`,
+          bx,
+          bz,
+          'Emerald',
+          [0xeef2ee, 0xdfe9e4, 0xf2e8d8, 0xd8e4ea],
+          [0x0f766e, 0x1e5c6b, 0x8a5236, 0x3b6355],
+        );
+      }
+    }
+  }
+
+  // =========================================================================
+  // CITY 3: AERO HIGHLAND (X: -84..84, Z: -346..-220)
+  // =========================================================================
+  const c3BlockX = [-63, -21, 21, 63];
+  const c3BlockZ = [-325, -283, -241];
+  for (let ix = 0; ix < c3BlockX.length; ix++) {
+    for (let iz = 0; iz < c3BlockZ.length; iz++) {
+      const bx = c3BlockX[ix];
+      const bz = c3BlockZ[iz];
+      let bType: BlockZone['type'] = 'residential_houses';
+      let dist: DistrictId = 'highland_tech';
+      if (bx === -21 && bz === -241) bType = 'residential_park';
+      else if (bx === 21 && bz === -241) bType = 'residential_apartments';
+      else if (bx === -21 && bz === -283) bType = 'downtown_tower';
+      else if (bx === 21 && bz === -283) bType = 'downtown_mall';
+      else if (bx === -63 && bz === -283) bType = 'coastal_restaurants';
+      else if (bx === 63 && bz === -241) {
+        bType = 'industrial_port';
+        dist = 'industrial';
+      } else if (bx === 63 && bz === -283) {
+        bType = 'industrial_factory';
+        dist = 'industrial';
+      } else if (bx === -21 && bz === -325) bType = 'downtown_parking';
+      else if (bx === 21 && bz === -325) bType = 'residential_apartments';
+      else if (bx === 63 && bz === -325) {
+        bType = 'industrial_port';
+        dist = 'industrial';
+      }
+
+      blocks.push({
+        id: `c3_blk_${ix}_${iz}`,
+        cx: bx,
+        cz: bz,
+        size: BLOCK_OUTER_SIZE,
+        type: bType,
+        district: dist,
+        label: DISTRICT_LABELS[dist],
+        cityId: 'aero_highland',
+      });
+
+      const lampOff = BLOCK_OUTER_SIZE * 0.5 - 1.1;
+      for (const [lx, lz, rY] of [
+        [bx - lampOff, bz - lampOff, Math.PI * 0.25],
+        [bx + lampOff, bz + lampOff, -Math.PI * 0.75],
+      ] as Array<[number, number, number]>) {
+        lamps.push({ x: lx, y: SIDEWALK_HEIGHT, z: lz, rotY: rY });
+        pushCollider(colliders, `c3_lamp_${lx}_${lz}`, lx, lz, 0.4, 0.4, 0, 5.0, 'prop', false);
+      }
+
+      if (bx === -21 && bz === -241) {
+        // Highland Pine Park
+        fountains.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz, radius: 3.3 });
+        pushCollider(colliders, 'c3_park_fount', bx, bz, 6.6, 6.6, SIDEWALK_HEIGHT, SIDEWALK_HEIGHT + 1.1, 'prop', false);
+        benches.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz + 6.0, rotY: Math.PI });
+        benches.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz - 6.0, rotY: 0 });
+        pushCollider(colliders, 'c3_park_b1', bx, bz + 6.0, 2.1, 0.75, 0, 0.9, 'prop', false);
+        pushCollider(colliders, 'c3_park_b2', bx, bz - 6.0, 2.1, 0.75, 0, 0.9, 'prop', false);
+        for (const [tx, tz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]]) {
+          trees.push({ x: bx + tx, y: SIDEWALK_HEIGHT, z: bz + tz, scale: 1.1, tint: 0x2f6b47, kind: 'deciduous' });
+          pushCollider(colliders, `c3_pt_${tx}_${tz}`, bx + tx, bz + tz, 0.9, 0.9, 0, 4.8, 'prop', false);
+        }
+      } else if (bx === -21 && bz === -283) {
+        addCityBuilding(
+          {
+            id: 'c3_aero_observatory',
+            x: bx - 4.2,
+            z: bz - 4.0,
+            width: 13.5,
+            depth: 13.5,
+            height: 48,
+            style: 'skyscraper',
+            primaryColor: 0xe0eaf5,
+            accentColor: 0x0284c7,
+            hasSpire: true,
+          },
+          { name: 'Aero Observatory Tower', category: 'business', subtype: 'corporate', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_research_labs',
+            x: bx + 8.0,
+            z: bz - 4.5,
+            width: 8.5,
+            depth: 11.5,
+            height: 21,
+            style: 'office',
+            primaryColor: 0xcbd8e6,
+            accentColor: 0x1d4ed8,
+          },
+          { name: 'Highland Research Labs', category: 'business', subtype: 'office', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 21 && bz === -283) {
+        addCityBuilding(
+          {
+            id: 'c3_skyline_mall',
+            x: bx,
+            z: bz - 3.5,
+            width: 21,
+            depth: 13.5,
+            height: 11.5,
+            style: 'mall',
+            primaryColor: 0xe6e8f0,
+            accentColor: 0x2563eb,
+            hasAwning: true,
+          },
+          { name: 'Skyline Atrium Mall', category: 'commercial', subtype: 'mall', doorStyle: 'glass_double' },
+        );
+        addParkedVehicle(parkedVehicles, colliders, 'c3_mall_car1', bx - 5.5, SIDEWALK_HEIGHT, bz + 7.5, 0, 'sedan', 0x38bdf8);
+        addParkedVehicle(parkedVehicles, colliders, 'c3_mall_car2', bx + 4.5, SIDEWALK_HEIGHT, bz + 7.5, 0, 'sedan', 0xe2e8f0);
+      } else if (bx === -63 && bz === -283) {
+        addCityBuilding(
+          {
+            id: 'c3_highland_mart',
+            x: bx - 5.8,
+            z: bz - 3.5,
+            width: 9.2,
+            depth: 10.5,
+            height: 5.0,
+            style: 'store',
+            primaryColor: 0xf4f3ef,
+            accentColor: 0x0284c7,
+            hasAwning: true,
+          },
+          { name: 'Highland Mart Express', category: 'commercial', subtype: 'convenience_store', doorStyle: 'storefront' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_summit_espresso',
+            x: bx + 5.8,
+            z: bz + 4.0,
+            width: 9.6,
+            depth: 9.8,
+            height: 5.6,
+            style: 'restaurant',
+            primaryColor: 0xede2d4,
+            accentColor: 0x7c3aed,
+            hasAwning: true,
+          },
+          { name: 'Summit Espresso House', category: 'commercial', subtype: 'cafe', doorStyle: 'storefront' },
+        );
+      } else if (bx === 21 && bz === -241) {
+        addCityBuilding(
+          {
+            id: 'c3_alpine_apt_a',
+            x: bx - 5.2,
+            z: bz - 3.5,
+            width: 11.2,
+            depth: 13.0,
+            height: 15.2,
+            style: 'apartment',
+            primaryColor: 0xd9e1eb,
+            accentColor: 0x3b5978,
+            hasAwning: true,
+          },
+          { name: 'Alpine View Apartments', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_alpine_apt_b',
+            x: bx + 6.5,
+            z: bz + 4.5,
+            width: 9.8,
+            depth: 11.2,
+            height: 12.6,
+            style: 'apartment',
+            primaryColor: 0xe3dfd6,
+            accentColor: 0x475569,
+          },
+          { name: 'Skyview Terrace Flats', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 63 && bz === -241) {
+        addCityBuilding(
+          {
+            id: 'c3_turbine_garage',
+            x: bx - 5.2,
+            z: bz - 3.5,
+            width: 10.8,
+            depth: 12.5,
+            height: 8.0,
+            style: 'workshop',
+            primaryColor: 0x737d87,
+            accentColor: 0x0284c7,
+          },
+          { name: 'Turbine Tuning Garage', category: 'industrial', subtype: 'workshop', doorStyle: 'industrial' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_pilot_diner',
+            x: bx + 6.2,
+            z: bz + 4.5,
+            width: 9.6,
+            depth: 10.2,
+            height: 6.0,
+            style: 'restaurant',
+            primaryColor: 0xf1e5d5,
+            accentColor: 0xe11d48,
+            hasAwning: true,
+          },
+          { name: 'Pilot Skyway Diner', category: 'commercial', subtype: 'restaurant', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 63 && bz === -283) {
+        addCityBuilding(
+          {
+            id: 'c3_aero_factory',
+            x: bx - 4.8,
+            z: bz - 3.5,
+            width: 13.0,
+            depth: 14.5,
+            height: 9.5,
+            style: 'factory',
+            primaryColor: 0x8b929a,
+            accentColor: 0x2563eb,
+          },
+          { name: 'Aero Propulsion Factory', category: 'industrial', subtype: 'factory', doorStyle: 'industrial' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_hangar_depot',
+            x: bx + 6.8,
+            z: bz + 3.5,
+            width: 9.4,
+            depth: 13.5,
+            height: 7.5,
+            style: 'warehouse',
+            primaryColor: 0x6f7984,
+            accentColor: 0x334155,
+          },
+          { name: 'Skyline Hangar Depot', category: 'industrial', subtype: 'warehouse', doorStyle: 'industrial' },
+        );
+      } else if (bx === -21 && bz === -325) {
+        addCityBuilding(
+          {
+            id: 'c3_northgate_corp',
+            x: bx - 5.4,
+            z: bz - 2.5,
+            width: 12.2,
+            depth: 14.5,
+            height: 26,
+            style: 'office',
+            primaryColor: 0xd4dde8,
+            accentColor: 0x1e40af,
+            hasSetback: true,
+          },
+          { name: 'Northgate Corporate Plaza', category: 'business', subtype: 'corporate', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_summit_bistro',
+            x: bx + 7.0,
+            z: bz + 4.5,
+            width: 9.5,
+            depth: 10.5,
+            height: 6.4,
+            style: 'restaurant',
+            primaryColor: 0xefe3d4,
+            accentColor: 0x0284c7,
+            hasAwning: true,
+          },
+          { name: 'Summit Horizon Bistro', category: 'commercial', subtype: 'restaurant', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 21 && bz === -325) {
+        addCityBuilding(
+          {
+            id: 'c3_eco_flats',
+            x: bx - 5.2,
+            z: bz - 3.0,
+            width: 11.0,
+            depth: 13.0,
+            height: 14.0,
+            style: 'apartment',
+            primaryColor: 0xdbe7e1,
+            accentColor: 0x2563eb,
+          },
+          { name: 'Eco Terrace Flats', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_alpine_cafe',
+            x: bx + 6.5,
+            z: bz + 4.5,
+            width: 9.2,
+            depth: 9.6,
+            height: 5.4,
+            style: 'restaurant',
+            primaryColor: 0xf1e6d8,
+            accentColor: 0x10b981,
+            hasAwning: true,
+          },
+          { name: 'Alpine Garden Cafe', category: 'commercial', subtype: 'cafe', doorStyle: 'storefront' },
+        );
+      } else if (bx === 63 && bz === -325) {
+        addCityBuilding(
+          {
+            id: 'c3_highland_logistics',
+            x: bx - 5.4,
+            z: bz - 3.5,
+            width: 11.2,
+            depth: 13.0,
+            height: 7.8,
+            style: 'warehouse',
+            primaryColor: 0x727c85,
+            accentColor: 0x2563eb,
+          },
+          { name: 'Highland Logistics Center', category: 'industrial', subtype: 'warehouse', doorStyle: 'industrial' },
+        );
+        addCityBuilding(
+          {
+            id: 'c3_north_workshop',
+            x: bx + 6.6,
+            z: bz + 3.5,
+            width: 9.6,
+            depth: 12.0,
+            height: 7.6,
+            style: 'workshop',
+            primaryColor: 0x7c848c,
+            accentColor: 0xd97706,
+          },
+          { name: 'North Tech Workshop', category: 'industrial', subtype: 'workshop', doorStyle: 'industrial' },
+        );
+      } else {
+        addResidentialHouseQuad(
+          `c3_${ix}_${iz}`,
+          bx,
+          bz,
+          'Highland',
+          [0xeaeef2, 0xdce4ec, 0xf0e7dc, 0xdbe3e6],
+          [0x2563eb, 0x3b4d5e, 0x6b4738, 0x2f5e53],
+        );
+      }
+    }
+  }
+
+  // =========================================================================
+  // CITY 4: GOLDEN HORIZON (X: -84..84, Z: 220..346)
+  // =========================================================================
+  const c4BlockX = [-63, -21, 21, 63];
+  const c4BlockZ = [241, 283, 325];
+  for (let ix = 0; ix < c4BlockX.length; ix++) {
+    for (let iz = 0; iz < c4BlockZ.length; iz++) {
+      const bx = c4BlockX[ix];
+      const bz = c4BlockZ[iz];
+      let bType: BlockZone['type'] = 'residential_houses';
+      let dist: DistrictId = 'suncrest_bay';
+      if (bx === -21 && bz === 241) bType = 'residential_park';
+      else if (bx === 21 && bz === 241) bType = 'residential_apartments';
+      else if (bx === -21 && bz === 283) bType = 'downtown_tower';
+      else if (bx === 21 && bz === 283) bType = 'downtown_mall';
+      else if (bx === -63 && bz === 283) bType = 'golden_promenade';
+      else if (bx === 63 && bz === 241) {
+        bType = 'coastal_restaurants';
+      } else if (bx === 63 && bz === 283) {
+        bType = 'industrial_factory';
+        dist = 'industrial';
+      } else if (bx === -21 && bz === 325) bType = 'downtown_parking';
+      else if (bx === 21 && bz === 325) bType = 'golden_promenade';
+      else if (bx === 63 && bz === 325) {
+        bType = 'industrial_port';
+        dist = 'industrial';
+      }
+
+      blocks.push({
+        id: `c4_blk_${ix}_${iz}`,
+        cx: bx,
+        cz: bz,
+        size: BLOCK_OUTER_SIZE,
+        type: bType,
+        district: dist,
+        label: DISTRICT_LABELS[dist],
+        cityId: 'golden_horizon',
+      });
+
+      const lampOff = BLOCK_OUTER_SIZE * 0.5 - 1.1;
+      for (const [lx, lz, rY] of [
+        [bx - lampOff, bz - lampOff, Math.PI * 0.25],
+        [bx + lampOff, bz + lampOff, -Math.PI * 0.75],
+      ] as Array<[number, number, number]>) {
+        lamps.push({ x: lx, y: SIDEWALK_HEIGHT, z: lz, rotY: rY });
+        pushCollider(colliders, `c4_lamp_${lx}_${lz}`, lx, lz, 0.4, 0.4, 0, 5.0, 'prop', false);
+      }
+
+      if (bx === -21 && bz === 241) {
+        // Golden Palm Park
+        fountains.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz, radius: 3.4 });
+        pushCollider(colliders, 'c4_park_fount', bx, bz, 6.8, 6.8, SIDEWALK_HEIGHT, SIDEWALK_HEIGHT + 1.1, 'prop', false);
+        benches.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz + 6.0, rotY: Math.PI });
+        benches.push({ x: bx, y: SIDEWALK_HEIGHT, z: bz - 6.0, rotY: 0 });
+        pushCollider(colliders, 'c4_park_b1', bx, bz + 6.0, 2.1, 0.75, 0, 0.9, 'prop', false);
+        pushCollider(colliders, 'c4_park_b2', bx, bz - 6.0, 2.1, 0.75, 0, 0.9, 'prop', false);
+        for (const [tx, tz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]]) {
+          trees.push({ x: bx + tx, y: SIDEWALK_HEIGHT, z: bz + tz, scale: 1.12, tint: 0x3b8c52, kind: 'palm' });
+          pushCollider(colliders, `c4_pt_${tx}_${tz}`, bx + tx, bz + tz, 0.9, 0.9, 0, 5.0, 'prop', false);
+        }
+      } else if (bx === -21 && bz === 283) {
+        addCityBuilding(
+          {
+            id: 'c4_golden_spire',
+            x: bx - 4.2,
+            z: bz - 4.0,
+            width: 13.5,
+            depth: 13.5,
+            height: 46,
+            style: 'skyscraper',
+            primaryColor: 0xf4ead8,
+            accentColor: 0xd97706,
+            hasSpire: true,
+          },
+          { name: 'Golden Horizon Spire', category: 'business', subtype: 'corporate', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_coastal_offices',
+            x: bx + 8.0,
+            z: bz - 4.5,
+            width: 8.5,
+            depth: 11.5,
+            height: 22,
+            style: 'office',
+            primaryColor: 0xe6dfd3,
+            accentColor: 0xb45309,
+          },
+          { name: 'Horizon Trade Offices', category: 'business', subtype: 'office', doorStyle: 'glass_double' },
+        );
+        fountains.push({ x: bx + 6.5, y: SIDEWALK_HEIGHT, z: bz + 6.5, radius: 2.7 });
+        pushCollider(colliders, 'c4_tower_fount', bx + 6.5, bz + 6.5, 5.4, 5.4, SIDEWALK_HEIGHT, SIDEWALK_HEIGHT + 1.1, 'prop', false);
+      } else if (bx === 21 && bz === 283) {
+        addCityBuilding(
+          {
+            id: 'c4_suncrest_mall',
+            x: bx,
+            z: bz - 3.5,
+            width: 21,
+            depth: 13.5,
+            height: 11.5,
+            style: 'mall',
+            primaryColor: 0xf2ece2,
+            accentColor: 0xeab308,
+            hasAwning: true,
+          },
+          { name: 'Suncrest Galleria Mall', category: 'commercial', subtype: 'mall', doorStyle: 'glass_double' },
+        );
+        addParkedVehicle(parkedVehicles, colliders, 'c4_mall_car1', bx - 5.5, SIDEWALK_HEIGHT, bz + 7.5, 0, 'sedan', 0xf59e0b);
+        addParkedVehicle(parkedVehicles, colliders, 'c4_mall_car2', bx + 4.5, SIDEWALK_HEIGHT, bz + 7.5, 0, 'suv', 0x0284c7);
+      } else if (bx === -63 && bz === 283) {
+        addCityBuilding(
+          {
+            id: 'c4_golden_mart',
+            x: bx - 5.8,
+            z: bz - 3.5,
+            width: 9.2,
+            depth: 10.5,
+            height: 5.0,
+            style: 'store',
+            primaryColor: 0xf7f2e7,
+            accentColor: 0xd97706,
+            hasAwning: true,
+          },
+          { name: 'Golden Mart Express', category: 'commercial', subtype: 'convenience_store', doorStyle: 'storefront' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_palms_cafe',
+            x: bx + 5.8,
+            z: bz + 4.0,
+            width: 9.6,
+            depth: 9.8,
+            height: 5.6,
+            style: 'restaurant',
+            primaryColor: 0xf3e4d2,
+            accentColor: 0xf97316,
+            hasAwning: true,
+          },
+          { name: 'Sunset Palms Cafe', category: 'commercial', subtype: 'cafe', doorStyle: 'storefront' },
+        );
+      } else if (bx === 21 && bz === 241) {
+        addCityBuilding(
+          {
+            id: 'c4_sunset_apt_a',
+            x: bx - 5.2,
+            z: bz - 3.5,
+            width: 11.2,
+            depth: 13.0,
+            height: 15.2,
+            style: 'apartment',
+            primaryColor: 0xede5d8,
+            accentColor: 0xd97706,
+            hasAwning: true,
+          },
+          { name: 'Suncrest Bay Residences', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_sunset_apt_b',
+            x: bx + 6.5,
+            z: bz + 4.5,
+            width: 9.8,
+            depth: 11.2,
+            height: 12.6,
+            style: 'apartment',
+            primaryColor: 0xe6ddd0,
+            accentColor: 0x9a3412,
+          },
+          { name: 'Sunset Palms Suites', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 63 && bz === 241) {
+        addCityBuilding(
+          {
+            id: 'c4_harbor_workshop',
+            x: bx - 5.2,
+            z: bz - 3.5,
+            width: 10.8,
+            depth: 12.5,
+            height: 8.0,
+            style: 'workshop',
+            primaryColor: 0x7b8087,
+            accentColor: 0xf97316,
+          },
+          { name: 'Sunset Marine Workshop', category: 'industrial', subtype: 'workshop', doorStyle: 'industrial' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_resort_bistro',
+            x: bx + 6.2,
+            z: bz + 4.5,
+            width: 9.6,
+            depth: 10.2,
+            height: 6.0,
+            style: 'restaurant',
+            primaryColor: 0xf4e6d2,
+            accentColor: 0xeab308,
+            hasAwning: true,
+          },
+          { name: 'Golden Coast Bistro', category: 'commercial', subtype: 'restaurant', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 63 && bz === 283) {
+        addCityBuilding(
+          {
+            id: 'c4_solar_factory',
+            x: bx - 4.8,
+            z: bz - 3.5,
+            width: 13.0,
+            depth: 14.5,
+            height: 9.5,
+            style: 'factory',
+            primaryColor: 0x8f949a,
+            accentColor: 0xeab308,
+          },
+          { name: 'Helios Clean Energy Plant', category: 'industrial', subtype: 'factory', doorStyle: 'industrial' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_cargo_warehouse',
+            x: bx + 6.8,
+            z: bz + 3.5,
+            width: 9.4,
+            depth: 13.5,
+            height: 7.5,
+            style: 'warehouse',
+            primaryColor: 0x747b82,
+            accentColor: 0xb45309,
+          },
+          { name: 'South Coast Depot', category: 'industrial', subtype: 'warehouse', doorStyle: 'industrial' },
+        );
+      } else if (bx === -21 && bz === 325) {
+        addCityBuilding(
+          {
+            id: 'c4_horizon_corp',
+            x: bx - 5.4,
+            z: bz - 2.5,
+            width: 12.2,
+            depth: 14.5,
+            height: 25,
+            style: 'office',
+            primaryColor: 0xe8dfd2,
+            accentColor: 0xd97706,
+            hasSetback: true,
+          },
+          { name: 'Golden Horizon Corporate', category: 'business', subtype: 'corporate', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_bayfront_diner',
+            x: bx + 7.0,
+            z: bz + 4.5,
+            width: 9.5,
+            depth: 10.5,
+            height: 6.2,
+            style: 'restaurant',
+            primaryColor: 0xf4e8d8,
+            accentColor: 0xf97316,
+            hasAwning: true,
+          },
+          { name: 'Horizon Bay Diner', category: 'commercial', subtype: 'restaurant', doorStyle: 'glass_double' },
+        );
+      } else if (bx === 21 && bz === 325) {
+        addCityBuilding(
+          {
+            id: 'c4_coral_flats',
+            x: bx - 5.2,
+            z: bz - 3.0,
+            width: 11.0,
+            depth: 13.0,
+            height: 14.0,
+            style: 'apartment',
+            primaryColor: 0xebe3d5,
+            accentColor: 0xeab308,
+          },
+          { name: 'Coral Sunset Flats', category: 'residential', subtype: 'apartment', doorStyle: 'glass_double' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_amber_coffee',
+            x: bx + 6.5,
+            z: bz + 4.5,
+            width: 9.2,
+            depth: 9.6,
+            height: 5.4,
+            style: 'restaurant',
+            primaryColor: 0xf5e9da,
+            accentColor: 0xb45309,
+            hasAwning: true,
+          },
+          { name: 'Amber Wave Roastery', category: 'commercial', subtype: 'cafe', doorStyle: 'storefront' },
+        );
+      } else if (bx === 63 && bz === 325) {
+        addCityBuilding(
+          {
+            id: 'c4_south_logistics',
+            x: bx - 5.4,
+            z: bz - 3.5,
+            width: 11.2,
+            depth: 13.0,
+            height: 7.8,
+            style: 'warehouse',
+            primaryColor: 0x767d85,
+            accentColor: 0xd97706,
+          },
+          { name: 'Southern Port Logistics', category: 'industrial', subtype: 'warehouse', doorStyle: 'industrial' },
+        );
+        addCityBuilding(
+          {
+            id: 'c4_solar_workshop',
+            x: bx + 6.6,
+            z: bz + 3.5,
+            width: 9.6,
+            depth: 12.0,
+            height: 7.6,
+            style: 'workshop',
+            primaryColor: 0x80858c,
+            accentColor: 0xeab308,
+          },
+          { name: 'Solar EV Garage', category: 'industrial', subtype: 'workshop', doorStyle: 'industrial' },
+        );
+      } else {
+        addResidentialHouseQuad(
+          `c4_${ix}_${iz}`,
+          bx,
+          bz,
+          'Suncrest',
+          [0xf7f1e5, 0xede4d5, 0xf2e8d8, 0xe8e2d8],
+          [0xd97706, 0xb45309, 0x0f766e, 0x9a3412],
+        );
+      }
+    }
+  }
+
+  // =========================================================================
+  // 4 INTERNATIONAL AIRPORTS (100% ENTERABLE TERMINALS + BOARDABLE JETS)
+  // =========================================================================
+  const airports: AirportSpec[] = [
+    {
+      id: 'airport_liberty',
+      cityId: 'liberty_metro',
+      name: 'Liberty International Airport',
+      code: 'LBY',
+      terminalBuildingId: 'airport_liberty_terminal',
+      centerX: -148,
+      centerZ: -142,
+      apronMinX: -214,
+      apronMaxX: -84,
+      apronMinZ: -172,
+      apronMaxZ: -112,
+      runwayStartX: -206,
+      runwayEndX: -92,
+      runwayZ: -134,
+      gateJetX: -152,
+      gateJetZ: -145,
+      gateJetYaw: 0.28,
+      arrivalSpawnX: -154,
+      arrivalSpawnZ: -148,
+      arrivalSpawnYaw: Math.PI,
+      connectorRects: [
+        { minX: -89, maxX: -79, minZ: -130, maxZ: -84 },
+        { minX: -170, maxX: -79, minZ: -132, maxZ: -120 },
+      ],
+    },
+    {
+      id: 'airport_emerald',
+      cityId: 'emerald_bay',
+      name: 'Emerald Bay International Airport',
+      code: 'EMB',
+      terminalBuildingId: 'airport_emerald_terminal',
+      centerX: 438,
+      centerZ: -20,
+      apronMinX: 382,
+      apronMaxX: 496,
+      apronMinZ: -64,
+      apronMaxZ: 14,
+      runwayStartX: 392,
+      runwayEndX: 488,
+      runwayZ: -2,
+      gateJetX: 438,
+      gateJetZ: -20,
+      gateJetYaw: 0.2,
+      arrivalSpawnX: 432,
+      arrivalSpawnZ: -31,
+      arrivalSpawnYaw: Math.PI,
+      connectorRects: [{ minX: 368, maxX: 395, minZ: -5, maxZ: 5 }],
+    },
+    {
+      id: 'airport_highland',
+      cityId: 'aero_highland',
+      name: 'Highland Aero International Airport',
+      code: 'HLD',
+      terminalBuildingId: 'airport_highland_terminal',
+      centerX: -152,
+      centerZ: -306,
+      apronMinX: -214,
+      apronMaxX: -94,
+      apronMinZ: -350,
+      apronMaxZ: -270,
+      runwayStartX: -204,
+      runwayEndX: -102,
+      runwayZ: -288,
+      gateJetX: -150,
+      gateJetZ: -307,
+      gateJetYaw: 0.22,
+      arrivalSpawnX: -152,
+      arrivalSpawnZ: -318,
+      arrivalSpawnYaw: Math.PI,
+      connectorRects: [{ minX: -115, maxX: -84, minZ: -309, maxZ: -299 }],
+    },
+    {
+      id: 'airport_golden',
+      cityId: 'golden_horizon',
+      name: 'Golden Horizon International Airport',
+      code: 'GZH',
+      terminalBuildingId: 'airport_golden_terminal',
+      centerX: -152,
+      centerZ: 274,
+      apronMinX: -214,
+      apronMaxX: -94,
+      apronMinZ: 228,
+      apronMaxZ: 312,
+      runwayStartX: -204,
+      runwayEndX: -102,
+      runwayZ: 296,
+      gateJetX: -150,
+      gateJetZ: 278,
+      gateJetYaw: 0.24,
+      arrivalSpawnX: -152,
+      arrivalSpawnZ: 260,
+      arrivalSpawnYaw: Math.PI,
+      connectorRects: [{ minX: -115, maxX: -84, minZ: 257, maxZ: 267 }],
+    },
+  ];
+
+  // Enterable Airport Terminals + ATC & Hangar colliders
+  addCityBuilding(
+    {
+      id: 'airport_liberty_terminal',
+      x: -154,
+      z: -158,
+      width: 36,
+      depth: 14,
+      height: 9,
+      style: 'airport_terminal',
+      primaryColor: 0xe2e8f0,
+      accentColor: 0x0284c7,
+      hasAwning: true,
+    },
+    {
+      name: 'Liberty International Terminal',
+      category: 'business',
+      subtype: 'airport_terminal',
+      doorSide: 'south',
+      doorStyle: 'glass_double',
+    },
+  );
+  pushCollider(colliders, 'ap_lby_atc', -182, -158, 6.2, 6.2, 0, 26, 'building', true);
+  pushCollider(colliders, 'ap_lby_hangar', -114, -156, 22, 18, 0, 10, 'building', true);
+
+  addCityBuilding(
+    {
+      id: 'airport_emerald_terminal',
+      x: 432,
+      z: -48,
+      width: 36,
+      depth: 14,
+      height: 9,
+      style: 'airport_terminal',
+      primaryColor: 0xe2f0ec,
+      accentColor: 0x0d9488,
+      hasAwning: true,
+    },
+    {
+      name: 'Emerald Bay Airport Terminal',
+      category: 'business',
+      subtype: 'airport_terminal',
+      doorSide: 'south',
+      doorStyle: 'glass_double',
+    },
+  );
+  pushCollider(colliders, 'ap_emb_atc', 404, -48, 6.2, 6.2, 0, 26, 'building', true);
+  pushCollider(colliders, 'ap_emb_hangar', 472, -46, 22, 18, 0, 10, 'building', true);
+
+  addCityBuilding(
+    {
+      id: 'airport_highland_terminal',
+      x: -152,
+      z: -334,
+      width: 36,
+      depth: 14,
+      height: 9,
+      style: 'airport_terminal',
+      primaryColor: 0xe5ebf5,
+      accentColor: 0x2563eb,
+      hasAwning: true,
+    },
+    {
+      name: 'Highland Aero Terminal',
+      category: 'business',
+      subtype: 'airport_terminal',
+      doorSide: 'south',
+      doorStyle: 'glass_double',
+    },
+  );
+  pushCollider(colliders, 'ap_hld_atc', -180, -334, 6.2, 6.2, 0, 26, 'building', true);
+  pushCollider(colliders, 'ap_hld_hangar', -112, -332, 22, 18, 0, 10, 'building', true);
+
+  addCityBuilding(
+    {
+      id: 'airport_golden_terminal',
+      x: -152,
+      z: 242,
+      width: 36,
+      depth: 14,
+      height: 9,
+      style: 'airport_terminal',
+      primaryColor: 0xf4ede0,
+      accentColor: 0xd97706,
+      hasAwning: true,
+    },
+    {
+      name: 'Golden Horizon Terminal',
+      category: 'business',
+      subtype: 'airport_terminal',
+      doorSide: 'south',
+      doorStyle: 'glass_double',
+    },
+  );
+  pushCollider(colliders, 'ap_gzh_atc', -180, 242, 6.2, 6.2, 0, 26, 'building', true);
+  pushCollider(colliders, 'ap_gzh_hangar', -112, 244, 22, 18, 0, 10, 'building', true);
+
+  // Coastline & Outer Water Barriers (bridges, beach, coastal pier & marina boat ramps stay open!)
+  // City 1 East coast: wharf (z -85..-14), East bridge opening (z -7..7), open ocean beach & pier (z 7..94)
+  pushCollider(colliders, 'sea_c1_e_top', 95.3, -90.5, 0.8, 9.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c1_e_mid', 95.3, -10.5, 0.8, 6.5, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c1_wharf_e', 103.3, -50.0, 0.8, 72.0, 0, 4, 'barrier', false);
+  // City 1 North coast (open at x -7..7 for North Bridge and x -89..-79 for Liberty Airport road)
+  pushCollider(colliders, 'sea_c1_n_e', 51.0, -95.2, 87.5, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c1_n_w1', -43.0, -95.2, 71.5, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c1_n_w2', -92.0, -95.2, 6.0, 0.8, 0, 4, 'barrier', false);
+  // City 1 West & South coast (South coast split cleanly around x -7..7 for Golden Sunset Bridge)
+  pushCollider(colliders, 'sea_c1_w', -95.5, 0, 0.8, 191, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c1_s_w', -51.25, 95.2, 88.5, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c1_s_e', 57.5, 95.2, 101.0, 0.8, 0, 4, 'barrier', false);
+
+  // City 2 (Emerald Bay) perimeter seawalls (open at East Bridge z=-7..7, Marina Ramp z=22..44, & East Airport x=382 z=-5..5)
+  pushCollider(colliders, 'sea_c2_w_n', 233.0, -51.0, 0.8, 87.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c2_w_s1', 233.0, 14.5, 0.8, 15.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c2_w_s2', 233.0, 69.5, 0.8, 51.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c2_n', 307.5, -95.2, 150.0, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c2_s', 307.5, 95.2, 150.0, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c2_e_n', 382.0, -50.5, 0.8, 89.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c2_e_s', 382.0, 50.5, 0.8, 89.0, 0, 4, 'barrier', false);
+
+  // City 3 (Aero Highland) perimeter seawalls (open at South z=-210 x=-7..7 for North Bridge & West x=-95 z=-309..-299 for Airport)
+  pushCollider(colliders, 'sea_c3_s_w', -51.0, -210.0, 87.5, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c3_s_e', 51.0, -210.0, 87.5, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c3_n', 0.0, -358.0, 191.0, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c3_e', 95.5, -284.0, 0.8, 149.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c3_w_s', -95.5, -254.0, 0.8, 89.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c3_w_n', -95.5, -334.0, 0.8, 49.0, 0, 4, 'barrier', false);
+
+  // City 4 (Golden Horizon) perimeter seawalls (open at North z=210 x=-7..7 for South Bridge & West x=-95.5 z=257..267 for Airport)
+  pushCollider(colliders, 'sea_c4_n_w', -51.25, 210.0, 88.5, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c4_n_e', 51.25, 210.0, 88.5, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c4_s', 0.0, 358.0, 191.0, 0.8, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c4_e', 95.5, 284.0, 0.8, 149.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c4_w_n', -95.5, 233.5, 0.8, 47.0, 0, 4, 'barrier', false);
+  pushCollider(colliders, 'sea_c4_w_s', -95.5, 312.5, 0.8, 91.0, 0, 4, 'barrier', false);
+
+  // Landmarks for City 2, City 3, City 4, Bridges, Airports & Coral Reef Dive Site
+  landmarks.push(
+    { id: 'lm_underwater_reef', label: 'Coral Reef & Shipwreck', shortCode: 'UW', district: 'coastal', x: 165, z: 58, color: '#06b6d4' },
+    { id: 'lm_bridge_eh', label: 'Grand Harbor Bridge', shortCode: 'BR', district: 'bridge', x: 165, z: 0, color: '#38bdf8' },
+    { id: 'lm_bridge_ns', label: 'Northern Skyway Bridge', shortCode: 'BR', district: 'bridge', x: 0, z: -155, color: '#f59e0b' },
+    { id: 'lm_bridge_ls', label: 'Golden Sunset Bridge', shortCode: 'BR', district: 'bridge', x: 0, z: 155, color: '#f97316' },
+    { id: 'lm_c2_tower', label: 'Emerald Sky Tower', shortCode: 'ET', district: 'bay_marina', x: 301, z: -25, color: '#10b981' },
+    { id: 'lm_c2_mall', label: 'Marina Harbor Mall', shortCode: 'MM', district: 'bay_marina', x: 263, z: -21, color: '#22d3ee' },
+    { id: 'lm_c2_airport', label: 'Emerald Bay Airport', shortCode: 'AP', district: 'airport', x: 432, z: -20, color: '#a78bfa' },
+    { id: 'lm_c3_obs', label: 'Aero Observatory', shortCode: 'AO', district: 'highland_tech', x: -25, z: -287, color: '#38bdf8' },
+    { id: 'lm_c3_mall', label: 'Skyline Atrium Mall', shortCode: 'SM', district: 'highland_tech', x: 21, z: -283, color: '#60a5fa' },
+    { id: 'lm_c3_airport', label: 'Highland Aero Airport', shortCode: 'AP', district: 'airport', x: -152, z: -306, color: '#a78bfa' },
+    { id: 'lm_c4_spire', label: 'Golden Horizon Spire', shortCode: 'GS', district: 'suncrest_bay', x: -25, z: 279, color: '#eab308' },
+    { id: 'lm_c4_mall', label: 'Suncrest Galleria Mall', shortCode: 'SG', district: 'suncrest_bay', x: 21, z: 280, color: '#f97316' },
+    { id: 'lm_c4_airport', label: 'Golden Horizon Airport', shortCode: 'AP', district: 'airport', x: -152, z: 276, color: '#a78bfa' },
+  );
+
+  // Additional Rooftops for City 2, City 3 & City 4 iconic towers
+  const extraRooftops: RooftopSpec[] = [
+    {
+      id: 'roof_emerald_tower',
+      buildingId: 'c2_emerald_tower',
+      name: 'Emerald Skydeck & Helipad',
+      minX: 301 - 6.75,
+      maxX: 301 + 6.75,
+      minZ: -25 - 6.75,
+      maxZ: -25 + 6.75,
+      y: SIDEWALK_HEIGHT + 44,
+      theme: 'helipad_skydeck',
+      hasHelipad: true,
+      hasGarden: true,
+      hasTelescopes: true,
+      interiorAccessDoor: { x: 304.8, z: -28.6, yaw: 0, targetFloor: 22 },
+      props: [
+        { id: 'rt_et_stair', kind: 'stairhouse', x: 304.8, z: -30.3, width: 3.2, depth: 2.8, height: 3.0, color: 0x0f766e },
+        { id: 'rt_et_tele', kind: 'telescope', x: 296.0, z: -19.8, width: 0.7, depth: 0.7, height: 1.35, rotY: 0 },
+        { id: 'rt_et_bench', kind: 'bench', x: 303.5, z: -20.2, width: 2.0, depth: 0.75, height: 0.85, rotY: Math.PI, vaultable: true },
+      ],
+    },
+    {
+      id: 'roof_aero_observatory',
+      buildingId: 'c3_aero_observatory',
+      name: 'Aero Observatory Skydeck',
+      minX: -25.2 - 6.75,
+      maxX: -25.2 + 6.75,
+      minZ: -287 - 6.75,
+      maxZ: -287 + 6.75,
+      y: SIDEWALK_HEIGHT + 48,
+      theme: 'helipad_skydeck',
+      hasHelipad: true,
+      hasGarden: true,
+      hasTelescopes: true,
+      interiorAccessDoor: { x: -21.0, z: -290.6, yaw: 0, targetFloor: 22 },
+      props: [
+        { id: 'rt_ao_stair', kind: 'stairhouse', x: -21.0, z: -292.3, width: 3.2, depth: 2.8, height: 3.0, color: 0x1e40af },
+        { id: 'rt_ao_tele', kind: 'telescope', x: -29.8, z: -281.8, width: 0.7, depth: 0.7, height: 1.35, rotY: 0 },
+        { id: 'rt_ao_bench', kind: 'bench', x: -22.2, z: -282.2, width: 2.0, depth: 0.75, height: 0.85, rotY: Math.PI, vaultable: true },
+      ],
+    },
+    {
+      id: 'roof_golden_spire',
+      buildingId: 'c4_golden_spire',
+      name: 'Golden Spire Skydeck',
+      minX: -25.2 - 6.75,
+      maxX: -25.2 + 6.75,
+      minZ: 279.0 - 6.75,
+      maxZ: 279.0 + 6.75,
+      y: SIDEWALK_HEIGHT + 46,
+      theme: 'helipad_skydeck',
+      hasHelipad: true,
+      hasGarden: true,
+      hasTelescopes: true,
+      interiorAccessDoor: { x: -21.0, z: 275.4, yaw: 0, targetFloor: 22 },
+      props: [
+        { id: 'rt_gs_stair', kind: 'stairhouse', x: -21.0, z: 273.7, width: 3.2, depth: 2.8, height: 3.0, color: 0xb45309 },
+        { id: 'rt_gs_tele', kind: 'telescope', x: -29.8, z: 284.2, width: 0.7, depth: 0.7, height: 1.35, rotY: 0 },
+        { id: 'rt_gs_bench', kind: 'bench', x: -22.2, z: 283.8, width: 2.0, depth: 0.75, height: 0.85, rotY: Math.PI, vaultable: true },
+      ],
+    },
+  ];
+  for (const roof of extraRooftops) {
+    rooftops.push(roof);
+    addPerimeterRailings(roof.id, roof.minX, roof.maxX, roof.minZ, roof.maxZ, roof.y);
+    for (const prop of roof.props) {
+      if (prop.kind === 'stairhouse' || prop.kind === 'bench') {
+        pushCollider(
+          colliders,
+          prop.id,
+          prop.x,
+          prop.z,
+          prop.width,
+          prop.depth,
+          roof.y,
+          roof.y + prop.height,
+          prop.kind === 'stairhouse' ? 'building' : 'prop',
+          prop.kind === 'stairhouse',
+          Boolean(prop.vaultable),
+        );
+      }
+    }
+  }
+
+  // NPC pedestrian loops in City 2, City 3 & City 4
+  npcLoops.push(
+    {
+      id: 'loop_c2_plaza',
+      points: [
+        { x: 249.2, z: -7.2 },
+        { x: 276.8, z: -7.2 },
+        { x: 276.8, z: -34.8 },
+        { x: 249.2, z: -34.8 },
+      ],
+    },
+    {
+      id: 'loop_c2_lagoon',
+      points: [
+        { x: 291.2, z: 7.2 },
+        { x: 318.8, z: 7.2 },
+        { x: 318.8, z: 34.8 },
+        { x: 291.2, z: 34.8 },
+      ],
+    },
+    {
+      id: 'loop_c3_campus',
+      points: [
+        { x: -34.8, z: -269.2 },
+        { x: -7.2, z: -269.2 },
+        { x: -7.2, z: -296.8 },
+        { x: -34.8, z: -296.8 },
+      ],
+    },
+    {
+      id: 'loop_c3_park',
+      points: [
+        { x: -34.8, z: -227.2 },
+        { x: -7.2, z: -227.2 },
+        { x: -7.2, z: -254.8 },
+        { x: -34.8, z: -254.8 },
+      ],
+    },
+    {
+      id: 'loop_c4_park',
+      points: [
+        { x: -34.8, z: 227.2 },
+        { x: -7.2, z: 227.2 },
+        { x: -7.2, z: 254.8 },
+        { x: -34.8, z: 254.8 },
+      ],
+    },
+    {
+      id: 'loop_c4_promenade',
+      points: [
+        { x: 7.2, z: 269.2 },
+        { x: 34.8, z: 269.2 },
+        { x: 34.8, z: 296.8 },
+        { x: 7.2, z: 296.8 },
+      ],
+    },
+  );
+
   return {
-    bounds: { minX: -94, maxX: 118, minZ: -94, maxZ: 94 },
+    bounds: { minX: -240, maxX: 520, minZ: -380, maxZ: 380 },
     spawn: { x: 0, y: 0, z: 16, yaw: 0 },
     roadCenters: ROAD_CENTERS,
     roadWidth: ROAD_WIDTH,
     sidewalkWidth: SIDEWALK_WIDTH,
     sidewalkHeight: SIDEWALK_HEIGHT,
+    cities,
+    bridges,
+    airports,
     blocks,
     buildings,
     houses,
@@ -1370,6 +3035,154 @@ function createCityLayout(): CityLayout {
 }
 
 export const CITY_LAYOUT: CityLayout = createCityLayout();
+
+export function getSingleBridgeHeight(alongPos: number, b: BridgeSpec): number {
+  const dStart = alongPos - b.start;
+  const dEnd = b.end - alongPos;
+  if (dStart <= 0 || dEnd <= 0) return 0;
+  if (dStart < b.rampLength) {
+    const t = dStart / b.rampLength;
+    return b.deckHeight * (t * t * (3 - 2 * t));
+  }
+  if (dEnd < b.rampLength) {
+    const t = dEnd / b.rampLength;
+    return b.deckHeight * (t * t * (3 - 2 * t));
+  }
+  return b.deckHeight;
+}
+
+export function getCityAt(
+  x: number,
+  z: number,
+  layout: CityLayout = CITY_LAYOUT,
+): CityZoneSpec {
+  if (x >= 185) {
+    return layout.cities.find((c) => c.id === 'emerald_bay') || layout.cities[0];
+  }
+  if (z <= -185) {
+    return layout.cities.find((c) => c.id === 'aero_highland') || layout.cities[0];
+  }
+  if (z >= 185) {
+    return layout.cities.find((c) => c.id === 'golden_horizon') || layout.cities[0];
+  }
+  return layout.cities[0];
+}
+
+export function isOnBridgeSurface(
+  x: number,
+  z: number,
+  referenceY = 0,
+  layout: CityLayout = CITY_LAYOUT,
+): boolean {
+  if (referenceY < -0.15) return false;
+  for (let i = 0; i < layout.bridges.length; i++) {
+    const br = layout.bridges[i];
+    const halfSpan = br.roadWidth * 0.5 + br.sidewalkWidth;
+    if (br.axis === 'x') {
+      if (x >= br.start && x <= br.end && Math.abs(z - br.crossCenter) <= halfSpan) {
+        return true;
+      }
+    } else if (z >= br.start && z <= br.end && Math.abs(x - br.crossCenter) <= halfSpan) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isOverDryLand(
+  x: number,
+  z: number,
+  layout: CityLayout = CITY_LAYOUT,
+): boolean {
+  // Coastal Tourist Pier
+  if (x >= 95 && x <= 118.5 && z >= 39 && z <= 45) return true;
+  // Harbor Industrial Wharf
+  if (x >= 89 && x <= 103.5 && z >= -86 && z <= -14) return true;
+  // Upper sandy beach above shoreline
+  if (x > 95 && x <= 107.8 && z >= -6 && z <= 94) return true;
+  // Airport aprons & connector roads
+  for (let i = 0; i < layout.airports.length; i++) {
+    const ap = layout.airports[i];
+    if (x >= ap.apronMinX - 2 && x <= ap.apronMaxX + 2 && z >= ap.apronMinZ - 2 && z <= ap.apronMaxZ + 2) {
+      return true;
+    }
+    for (let j = 0; j < ap.connectorRects.length; j++) {
+      const r = ap.connectorRects[j];
+      if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) return true;
+    }
+  }
+  // City islands
+  for (let i = 0; i < layout.cities.length; i++) {
+    const c = layout.cities[i];
+    if (x >= c.landMinX - 2 && x <= c.landMaxX + 2 && z >= c.landMinZ - 2 && z <= c.landMaxZ + 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function getSeabedHeightAt(x: number, z: number): number {
+  // Gentle continental shelf off Liberty Metro beach (x = 107..136, z = -8..96)
+  if (x >= 107 && x <= 136 && z >= -8 && z <= 96) {
+    const t = Math.max(0, Math.min(1, (x - 107) / 29));
+    const smoothT = t * t * (3 - 2 * t);
+    return -0.35 + smoothT * (OCEAN_SEABED_Y + 0.35);
+  }
+  // Gentle marina shelf off Emerald Bay west ramp (x = 206..233, z = 18..48)
+  if (x >= 206 && x <= 233 && z >= 18 && z <= 48) {
+    const t = Math.max(0, Math.min(1, (233 - x) / 27));
+    const smoothT = t * t * (3 - 2 * t);
+    return -0.35 + smoothT * (OCEAN_SEABED_Y + 0.35);
+  }
+  // Open ocean seabed with gentle natural sand ripples
+  return OCEAN_SEABED_Y + Math.sin(x * 0.045) * Math.cos(z * 0.045) * 0.45;
+}
+
+export interface WaterQueryResult {
+  inWater: boolean;
+  isSubmerged: boolean;
+  waterSurfaceY: number;
+  seabedY: number;
+  depth: number;
+}
+
+export function getWaterInfoAt(
+  x: number,
+  z: number,
+  referenceY = 0,
+  layout: CityLayout = CITY_LAYOUT,
+): WaterQueryResult {
+  if (isOnBridgeSurface(x, z, referenceY, layout)) {
+    return { inWater: false, isSubmerged: false, waterSurfaceY: WATER_SURFACE_Y, seabedY: OCEAN_SEABED_Y, depth: 0 };
+  }
+  // Standing on pier / wharf / dry beach / city islands above water
+  if (x >= 95 && x <= 118.5 && z >= 39 && z <= 45 && referenceY >= -0.08) {
+    return { inWater: false, isSubmerged: false, waterSurfaceY: WATER_SURFACE_Y, seabedY: OCEAN_SEABED_Y, depth: 0 };
+  }
+  if (x >= 89 && x <= 103.5 && z >= -86 && z <= -14 && referenceY >= -0.08) {
+    return { inWater: false, isSubmerged: false, waterSurfaceY: WATER_SURFACE_Y, seabedY: OCEAN_SEABED_Y, depth: 0 };
+  }
+  if (x > 95 && x <= 107.8 && z >= -6 && z <= 94) {
+    const t = Math.max(0, Math.min(1, (x - 95) / 14));
+    const beachY = 0.06 - t * 0.42;
+    const depth = Math.max(0, WATER_SURFACE_Y - beachY);
+    return {
+      inWater: depth > 0.12 && referenceY <= WATER_SURFACE_Y + 0.35,
+      isSubmerged: false,
+      waterSurfaceY: WATER_SURFACE_Y,
+      seabedY: beachY,
+      depth,
+    };
+  }
+  if (isOverDryLand(x, z, layout)) {
+    return { inWater: false, isSubmerged: false, waterSurfaceY: WATER_SURFACE_Y, seabedY: 0, depth: 0 };
+  }
+  const seabedY = getSeabedHeightAt(x, z);
+  const depth = Math.max(0, WATER_SURFACE_Y - seabedY);
+  const inWater = depth > 0.15 && referenceY <= WATER_SURFACE_Y + 0.4;
+  const isSubmerged = inWater && referenceY < WATER_SURFACE_Y - 0.85;
+  return { inWater, isSubmerged, waterSurfaceY: WATER_SURFACE_Y, seabedY, depth };
+}
 
 export function getGroundHeightAt(
   x: number,
@@ -1392,8 +3205,29 @@ export function getGroundHeightAt(
     }
   }
 
-  // Coastal Tourist Pier (x = 95..118, z in [39..45]) sits above water at sidewalkHeight
-  if (x >= 95 && x <= 118.5 && z >= 39 && z <= 45) {
+  // Bridges (evaluate before beaches/ocean so ramps & spans sit smoothly above water — unless swimming below!)
+  if (currentY === undefined || currentY >= -0.25) {
+    for (let i = 0; i < layout.bridges.length; i++) {
+      const br = layout.bridges[i];
+      const halfSpan = br.roadWidth * 0.5 + br.sidewalkWidth;
+      if (br.axis === 'x') {
+        if (x >= br.start && x <= br.end && Math.abs(z - br.crossCenter) <= halfSpan) {
+          const deckY = getSingleBridgeHeight(x, br);
+          const onSidewalk = Math.abs(z - br.crossCenter) > br.roadWidth * 0.5;
+          return onSidewalk ? deckY + layout.sidewalkHeight : deckY;
+        }
+      } else {
+        if (z >= br.start && z <= br.end && Math.abs(x - br.crossCenter) <= halfSpan) {
+          const deckY = getSingleBridgeHeight(z, br);
+          const onSidewalk = Math.abs(x - br.crossCenter) > br.roadWidth * 0.5;
+          return onSidewalk ? deckY + layout.sidewalkHeight : deckY;
+        }
+      }
+    }
+  }
+
+  // Coastal Tourist Pier (x = 95..118.5, z in [39..45]) sits above water at sidewalkHeight
+  if (x >= 95 && x <= 118.5 && z >= 39 && z <= 45 && (currentY === undefined || currentY >= -0.25)) {
     return layout.sidewalkHeight + 0.04;
   }
 
@@ -1403,23 +3237,42 @@ export function getGroundHeightAt(
   }
 
   // Coastal Sandy Beach sloping gently from seawall (x=95, y=0.06) down to shoreline (x=108, y=-0.35)
-  if (x > 95 && x <= 118 && z >= -6 && z <= 94) {
+  if (x > 95 && x <= 107.8 && z >= -6 && z <= 94) {
     const t = Math.max(0, Math.min(1, (x - 95) / 14));
     return 0.06 - t * 0.42;
   }
 
-  const halfRoad = layout.roadWidth * 0.5;
-  for (const rc of layout.roadCenters) {
-    if (Math.abs(x - rc) < halfRoad || Math.abs(z - rc) < halfRoad) {
+  // Airport aprons & connector roads sit cleanly at ground y = 0 (or sidewalkHeight under terminals)
+  for (let i = 0; i < layout.airports.length; i++) {
+    const ap = layout.airports[i];
+    if (x >= ap.apronMinX - 2 && x <= ap.apronMaxX + 2 && z >= ap.apronMinZ - 2 && z <= ap.apronMaxZ + 2) {
       return 0;
+    }
+    for (let j = 0; j < ap.connectorRects.length; j++) {
+      const r = ap.connectorRects[j];
+      if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) {
+        return 0;
+      }
     }
   }
 
-  if (x >= layout.bounds.minX - 2 && x <= 95.5 && z >= layout.bounds.minZ - 2 && z <= layout.bounds.maxZ + 2) {
-    return layout.sidewalkHeight;
+  // City road grids & block sidewalks
+  const halfRoad = layout.roadWidth * 0.5;
+  for (let i = 0; i < layout.cities.length; i++) {
+    const c = layout.cities[i];
+    if (x >= c.landMinX - 2 && x <= c.landMaxX + 2 && z >= c.landMinZ - 2 && z <= c.landMaxZ + 2) {
+      for (const rx of c.roadCentersX) {
+        if (Math.abs(x - rx) < halfRoad) return 0;
+      }
+      for (const rz of c.roadCentersZ) {
+        if (Math.abs(z - rz) < halfRoad) return 0;
+      }
+      return layout.sidewalkHeight;
+    }
   }
 
-  return 0;
+  // Open ocean seabed floor
+  return getSeabedHeightAt(x, z);
 }
 
 export function getDistrictAt(
@@ -1427,7 +3280,25 @@ export function getDistrictAt(
   z: number,
   layout: CityLayout = CITY_LAYOUT,
 ): { id: DistrictId; name: string } {
-  if (x > 89) {
+  for (const br of layout.bridges) {
+    const halfSpan = br.roadWidth * 0.5 + br.sidewalkWidth + 0.5;
+    if (br.axis === 'x') {
+      if (x >= br.start && x <= br.end && Math.abs(z - br.crossCenter) <= halfSpan) {
+        return { id: 'bridge', name: br.name };
+      }
+    } else if (z >= br.start && z <= br.end && Math.abs(x - br.crossCenter) <= halfSpan) {
+      return { id: 'bridge', name: br.name };
+    }
+  }
+
+  for (const ap of layout.airports) {
+    if (x >= ap.apronMinX && x <= ap.apronMaxX && z >= ap.apronMinZ && z <= ap.apronMaxZ) {
+      return { id: 'airport', name: ap.name };
+    }
+  }
+
+  // City 1 east waterfront (wharf & beach)
+  if (x > 89 && x < 130 && z >= -95 && z <= 95) {
     if (z < -8) {
       return { id: 'industrial', name: DISTRICT_LABELS.industrial };
     }
@@ -1462,18 +3333,7 @@ export function resolveCircleAABBCollision(
   layout: CityLayout = CITY_LAYOUT,
   skipColliderId?: string | null,
 ): { x: number; z: number; collided: boolean } {
-  // Clamp East coastline: allow walking on Industrial Wharf (x<=102.5, z<-14),
-  // Coastal Beach up to shoreline (x<=106.5, z>=-6), or Tourist Pier (x<=117.5, z in [39.5..44.5])
-  let eastMax = 94.5;
-  if (z >= 39.4 && z <= 44.6) {
-    eastMax = 117.2;
-  } else if (z >= -5 && z <= 93.5) {
-    eastMax = 106.5;
-  } else if (z >= -85 && z <= -15) {
-    eastMax = 102.5;
-  }
-
-  let nx = Math.max(layout.bounds.minX + radius, Math.min(eastMax - radius, x));
+  let nx = Math.max(layout.bounds.minX + radius, Math.min(layout.bounds.maxX - radius, x));
   let nz = Math.max(layout.bounds.minZ + radius, Math.min(layout.bounds.maxZ - radius, z));
   let collided = nx !== x || nz !== z;
 
@@ -1605,9 +3465,10 @@ export function raycastCameraCollision(
 
   if (bestT < 1.0) {
     const pullT = Math.max(0.05, bestT - margin / segLen);
+    const minCamY = oy < WATER_SURFACE_Y ? OCEAN_SEABED_Y + 0.45 : 0.65;
     return {
       x: ox + dx * pullT,
-      y: Math.max(0.65, oy + dy * pullT),
+      y: Math.max(minCamY, oy + dy * pullT),
       z: oz + dz * pullT,
       clipped: true,
     };

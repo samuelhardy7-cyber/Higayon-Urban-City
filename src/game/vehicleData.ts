@@ -1,5 +1,5 @@
 import type { CityLayout, VehicleKind, VehicleSpec, VehicleState } from './types';
-import { CITY_LAYOUT, getGroundHeightAt } from './worldData';
+import { CITY_LAYOUT, getGroundHeightAt, WATER_SURFACE_Y } from './worldData';
 
 export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
   sedan: {
@@ -96,6 +96,70 @@ export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
     seatOffsetZ: 0.15,
     exitOffsetX: -1.05,
     isMotorcycle: true,
+    domain: 'land',
+  },
+  jetski: {
+    kind: 'jetski',
+    label: 'WaveRunner Jet Ski',
+    maxSpeed: 27,
+    reverseSpeed: 7,
+    accel: 16.5,
+    brakeDecel: 18,
+    turnRate: 2.95,
+    length: 2.75,
+    width: 1.12,
+    wheelRadius: 0.24,
+    wheelBase: 1.6,
+    trackWidth: 0,
+    seatOffsetX: 0,
+    seatOffsetY: 0.62,
+    seatOffsetZ: 0.16,
+    exitOffsetX: -1.15,
+    isMotorcycle: false,
+    domain: 'water',
+    draftDepth: 0.18,
+  },
+  speedboat: {
+    kind: 'speedboat',
+    label: 'Emerald Speedboat',
+    maxSpeed: 31,
+    reverseSpeed: 9,
+    accel: 14.5,
+    brakeDecel: 16,
+    turnRate: 2.2,
+    length: 5.4,
+    width: 2.15,
+    wheelRadius: 0.28,
+    wheelBase: 3.2,
+    trackWidth: 1.4,
+    seatOffsetX: 0.32,
+    seatOffsetY: 0.66,
+    seatOffsetZ: 0.25,
+    exitOffsetX: -1.7,
+    isMotorcycle: false,
+    domain: 'water',
+    draftDepth: 0.32,
+  },
+  submarine: {
+    kind: 'submarine',
+    label: 'Deep Explorer Sub',
+    maxSpeed: 18,
+    reverseSpeed: 8,
+    accel: 10.5,
+    brakeDecel: 14,
+    turnRate: 1.85,
+    length: 5.6,
+    width: 2.1,
+    wheelRadius: 0.34,
+    wheelBase: 3.0,
+    trackWidth: 1.5,
+    seatOffsetX: 0,
+    seatOffsetY: 0.56,
+    seatOffsetZ: -0.4,
+    exitOffsetX: -1.75,
+    isMotorcycle: false,
+    domain: 'submersible',
+    draftDepth: 0.58,
   },
 };
 
@@ -166,6 +230,60 @@ export const TRAFFIC_LANE_LOOPS: RoadLaneLoop[] = [
       { x: -81.55, z: -39.55 },
     ],
   },
+  // 7. Grand Harbor Cross-Bridge Intercity Loop (Liberty Metro <-> Emerald Bay)
+  {
+    id: 'lane_bridge_eh',
+    points: [
+      { x: 44.45, z: 2.45 },
+      { x: 281.55, z: 2.45 },
+      { x: 281.55, z: 39.55 },
+      { x: 244.45, z: 39.55 },
+      { x: 244.45, z: -2.45 },
+      { x: 44.45, z: -2.45 },
+    ],
+  },
+  // 8. City 2 (Emerald Bay) Downtown & Marina Loop
+  {
+    id: 'lane_c2_loop',
+    points: [
+      { x: 244.45, z: 39.55 },
+      { x: 244.45, z: -39.55 },
+      { x: 323.55, z: -39.55 },
+      { x: 323.55, z: 39.55 },
+    ],
+  },
+  // 9. City 3 (Aero Highland) Observatory & Tech Loop
+  {
+    id: 'lane_c3_loop',
+    points: [
+      { x: -39.55, z: -222.45 },
+      { x: -39.55, z: -301.55 },
+      { x: 39.55, z: -301.55 },
+      { x: 39.55, z: -222.45 },
+    ],
+  },
+  // 10. Golden Sunset South Bridge Intercity Loop (Liberty Metro <-> Golden Horizon)
+  {
+    id: 'lane_bridge_ls',
+    points: [
+      { x: -2.45, z: 44.45 },
+      { x: -2.45, z: 264.45 },
+      { x: 39.55, z: 264.45 },
+      { x: 39.55, z: 222.45 },
+      { x: 2.45, z: 222.45 },
+      { x: 2.45, z: 44.45 },
+    ],
+  },
+  // 11. City 4 (Golden Horizon) Boulevard Loop
+  {
+    id: 'lane_c4_loop',
+    points: [
+      { x: -39.55, z: 301.55 },
+      { x: -39.55, z: 222.45 },
+      { x: 39.55, z: 222.45 },
+      { x: 39.55, z: 301.55 },
+    ],
+  },
 ];
 
 export function createInitialVehicles(layout: CityLayout = CITY_LAYOUT): VehicleState[] {
@@ -180,14 +298,20 @@ export function createInitialVehicles(layout: CityLayout = CITY_LAYOUT): Vehicle
     color: number,
   ) => {
     const spec = VEHICLE_SPECS[kind];
+    const isMarine = spec.domain === 'water' || spec.domain === 'submersible';
+    const spawnY = isMarine
+      ? WATER_SURFACE_Y - (spec.draftDepth ?? 0.28)
+      : getGroundHeightAt(x, z, layout);
     vehicles.push({
       id,
       kind,
       label: spec.label,
       x,
-      y: getGroundHeightAt(x, z, layout),
+      y: spawnY,
       z,
       yaw,
+      pitch: 0,
+      verticalSpeed: 0,
       speed: 0,
       steerAngle: 0,
       wheelSpin: 0,
@@ -207,7 +331,7 @@ export function createInitialVehicles(layout: CityLayout = CITY_LAYOUT): Vehicle
     });
   };
 
-  // Driveable Player-Ready Vehicles across all 4 districts + central spawn plaza
+  // Driveable Player-Ready Vehicles across all 3 cities + 3 international airports
   addPlayerVehicle('veh_spawn_sports', 'sports', 3.1, 10.5, 0, 0xe04828); // Sports car right ahead of spawn
   addPlayerVehicle('veh_spawn_motor', 'motor', -3.1, 13.5, 0, 0x2299b8); // Motorcycle across curb at spawn
   addPlayerVehicle('veh_dt_sedan', 'sedan', -14.0, -3.3, Math.PI * 0.5, 0x2f6a96); // Downtown Plaza road curb
@@ -219,7 +343,33 @@ export function createInitialVehicles(layout: CityLayout = CITY_LAYOUT): Vehicle
   addPlayerVehicle('veh_coast_motor', 'motor', 86.8, 42.0, Math.PI * 0.5, 0xd93838); // Coastal Pier entrance
   addPlayerVehicle('veh_coast_suv', 'suv', 45.2, 60.0, Math.PI, 0x2b7e8c); // South Resort avenue
 
-  // Autonomous NPC Traffic Vehicles (6 civilian cruisers across lane loops)
+  // City 1 Liberty Airport curb
+  addPlayerVehicle('veh_lby_airport_sedan', 'sedan', -140.0, -147.0, -Math.PI * 0.5, 0xf8fafc);
+
+  // City 2 (Emerald Bay) driveable vehicles
+  addPlayerVehicle('veh_c2_sports', 'sports', 242.0, -16.0, 0, 0x10b981);
+  addPlayerVehicle('veh_c2_suv', 'suv', 284.0, 18.0, Math.PI, 0x0ea5e9);
+  addPlayerVehicle('veh_c2_airport_sedan', 'sedan', 418.0, -37.0, -Math.PI * 0.5, 0xe2e8f0);
+
+  // City 3 (Aero Highland) driveable vehicles
+  addPlayerVehicle('veh_c3_sedan', 'sedan', 2.6, -218.0, 0, 0x3b82f6);
+  addPlayerVehicle('veh_c3_pickup', 'pickup', 42.0, -264.0, Math.PI * 0.5, 0xf59e0b);
+  addPlayerVehicle('veh_c3_airport_motor', 'motor', -138.0, -323.0, -Math.PI * 0.5, 0x6366f1);
+
+  // City 4 (Golden Horizon) driveable vehicles
+  addPlayerVehicle('veh_c4_sports', 'sports', -2.6, 218.0, Math.PI, 0xf59e0b);
+  addPlayerVehicle('veh_c4_suv', 'suv', 42.0, 260.0, Math.PI * 0.5, 0x0ea5e9);
+  addPlayerVehicle('veh_c4_airport_sedan', 'sedan', -138.0, 263.0, -Math.PI * 0.5, 0xf8fafc);
+
+  // Marine Watercraft & Submarines across Liberty Coast & Emerald Bay Harbor
+  addPlayerVehicle('veh_pier_jetski', 'jetski', 120.0, 48.0, -Math.PI * 0.5, 0x06b6d4);
+  addPlayerVehicle('veh_beach_speedboat', 'speedboat', 127.0, 20.0, -Math.PI * 0.4, 0xef4444);
+  addPlayerVehicle('veh_bay_submarine', 'submarine', 132.0, 56.0, -Math.PI * 0.45, 0xfacc15);
+  addPlayerVehicle('veh_c2_jetski', 'jetski', 214.0, 22.0, Math.PI * 0.5, 0x10b981);
+  addPlayerVehicle('veh_c2_speedboat', 'speedboat', 218.0, -24.0, Math.PI * 0.6, 0x3b82f6);
+  addPlayerVehicle('veh_c2_submarine', 'submarine', 194.0, 48.0, Math.PI * 0.4, 0xf59e0b);
+
+  // Autonomous NPC Traffic Vehicles across City 1, Cross-Bridges, City 2, City 3 & City 4
   const trafficSpawns: Array<{
     id: string;
     kind: VehicleKind;
@@ -235,6 +385,11 @@ export function createInitialVehicles(layout: CityLayout = CITY_LAYOUT): Vehicle
     { id: 'trf_4', kind: 'sports', loopIndex: 3, wpIndex: 0, progress: 0.45, color: 0xc94238, speed: 12.0 },
     { id: 'trf_5', kind: 'sedan', loopIndex: 4, wpIndex: 1, progress: 0.55, color: 0xd6dce0, speed: 10.2 },
     { id: 'trf_6', kind: 'motor', loopIndex: 5, wpIndex: 0, progress: 0.5, color: 0x2b7556, speed: 11.5 },
+    { id: 'trf_bridge', kind: 'suv', loopIndex: 6, wpIndex: 0, progress: 0.35, color: 0x0ea5e9, speed: 11.5 },
+    { id: 'trf_c2', kind: 'sedan', loopIndex: 7, wpIndex: 1, progress: 0.4, color: 0x10b981, speed: 10.4 },
+    { id: 'trf_c3', kind: 'sports', loopIndex: 8, wpIndex: 2, progress: 0.5, color: 0x3b82f6, speed: 11.2 },
+    { id: 'trf_bridge_s', kind: 'sports', loopIndex: 9, wpIndex: 0, progress: 0.45, color: 0xf97316, speed: 11.8 },
+    { id: 'trf_c4', kind: 'suv', loopIndex: 10, wpIndex: 1, progress: 0.4, color: 0xeab308, speed: 10.6 },
   ];
 
   for (const ts of trafficSpawns) {
@@ -279,6 +434,7 @@ export function createInitialVehicles(layout: CityLayout = CITY_LAYOUT): Vehicle
     { id: 'pol_1', loopIndex: 0, wpIndex: 2, progress: 0.5 },
     { id: 'pol_2', loopIndex: 2, wpIndex: 1, progress: 0.45 },
     { id: 'pol_3', loopIndex: 5, wpIndex: 2, progress: 0.35 },
+    { id: 'pol_4', loopIndex: 10, wpIndex: 2, progress: 0.45 },
   ];
 
   for (const ps of policeSpawns) {

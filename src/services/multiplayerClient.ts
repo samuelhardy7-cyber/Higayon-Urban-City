@@ -40,6 +40,42 @@ function getGuestId(): string {
   }
 }
 
+export function getTabMultiplayerGuestId(): string {
+  try {
+    const key = 'urban_life_tab_guest_id';
+    let existing = window.sessionStorage.getItem(key);
+    if (!existing) {
+      existing = `tab_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      window.sessionStorage.setItem(key, existing);
+    }
+    return existing;
+  } catch {
+    return getGuestId();
+  }
+}
+
+export function getSavedGuestDisplayName(): string {
+  try {
+    return (window.localStorage.getItem('urban_life_guest_name') || '').trim().slice(0, 22);
+  } catch {
+    return '';
+  }
+}
+
+export function saveGuestDisplayName(name: string): string {
+  const cleaned = name.replace(/[\r\n<>]/g, '').trim().slice(0, 22);
+  try {
+    if (cleaned) {
+      window.localStorage.setItem('urban_life_guest_name', cleaned);
+    } else {
+      window.localStorage.removeItem('urban_life_guest_name');
+    }
+  } catch {
+    // ignore
+  }
+  return cleaned;
+}
+
 async function apiJson<T>(
   url: string,
   options?: RequestInit & { idToken?: string | null; teacherToken?: string | null },
@@ -355,6 +391,7 @@ export class MultiplayerWsClient {
   private ws: WebSocket | null = null;
   private callbacks: MultiplayerClientCallbacks;
   private getToken: () => Promise<string | null>;
+  private getDisplayName: () => string;
   private joinCode = '';
   private avatar: CharacterCustomization;
   private closedManually = false;
@@ -366,10 +403,12 @@ export class MultiplayerWsClient {
     getToken: () => Promise<string | null>,
     initialAvatar: CharacterCustomization,
     callbacks: MultiplayerClientCallbacks,
+    getDisplayName?: () => string,
   ) {
     this.getToken = getToken;
     this.avatar = initialAvatar;
     this.callbacks = callbacks;
+    this.getDisplayName = getDisplayName || (() => getSavedGuestDisplayName());
   }
 
   public async connect(joinCode: string, avatar: CharacterCustomization): Promise<void> {
@@ -392,8 +431,9 @@ export class MultiplayerWsClient {
     }
 
     const token = await this.getToken();
-    if (!token) {
-      this.callbacks.onError('UNAUTHORIZED', 'Google sign-in is required for multiplayer.');
+    const isPublicOpenWorld = this.joinCode === 'OPEN_WORLD';
+    if (!token && !isPublicOpenWorld) {
+      this.callbacks.onError('UNAUTHORIZED', 'Google sign-in is required for classroom sessions.');
       this.callbacks.onConnectionChange('disconnected');
       return;
     }
@@ -407,7 +447,9 @@ export class MultiplayerWsClient {
       this.reconnectAttempts = 0;
       const msg: ClientWsMessage = {
         type: 'auth:join',
-        token,
+        token: token || undefined,
+        guestId: token ? undefined : getTabMultiplayerGuestId(),
+        displayName: token ? undefined : this.getDisplayName(),
         joinCode: this.joinCode,
         avatar: this.avatar,
       };

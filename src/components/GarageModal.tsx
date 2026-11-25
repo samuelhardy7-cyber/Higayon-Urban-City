@@ -42,8 +42,8 @@ export const GarageModal: FC<GarageModalProps> = ({
     GARAGE_CATALOG.find((g) => g.kind === inspectedKind) || GARAGE_CATALOG[0];
   const isOwned = progression.ownedVehicles.includes(inspectedKind);
   const isActive = progression.activeGarageVehicle === inspectedKind;
-  const upgrades = progression.vehicleUpgrades[inspectedKind];
-  const currentPaint = progression.vehicleColors[inspectedKind];
+  const upgrades = progression.vehicleUpgrades[inspectedKind] || { engine: 0, handling: 0, chassis: 0 };
+  const currentPaint = progression.vehicleColors[inspectedKind] ?? selectedItem.defaultColor;
 
   return (
     <div

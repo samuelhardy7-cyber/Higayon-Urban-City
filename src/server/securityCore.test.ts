@@ -4,6 +4,8 @@ import { resolveQuestionKpReward } from '../game/rewardShopCatalog';
 import {
   BOOTSTRAPPED_TEACHER_EMAIL,
   GameBackendStore,
+  PUBLIC_OPEN_WORLD_CODE,
+  PUBLIC_OPEN_WORLD_SESSION_ID,
   PinRateLimiter,
   TeacherTokenManager,
   hashPin,
@@ -376,3 +378,183 @@ test('GameBackendStore filters session chat, caps exploration groups at 5, and s
   assert.ok(rep.id);
   assert.equal(store.getModerationReports().length, 1);
 });
+
+test('GameBackendStore supports Emerald Bay, Aero Highland, intercity flight speed, and City 2/3 22F elevators', () => {
+  const store = new GameBackendStore({ persistPath: null });
+  const db = store.getFullDatabase();
+  const session = store.createSession('teacher_uid', {
+    name: 'Global Flight Tour',
+    subject: 'Geography',
+    questionSetId: db.questionSets[0].id,
+    joinCode: 'FLY333',
+  });
+  store.joinSession({ joinCode: 'FLY333', playerId: 'pilot_1', displayName: 'Sky' });
+  const avatar = store.buildSessionSnapshot(session.id)!.players[0].avatar;
+  const t0 = Date.now();
+
+  // Intercity flight movement at high altitude & speed should not clamp into Liberty Metro
+  const airborne = store.updateRemotePlayerState(
+    session.id,
+    'pilot_1',
+    {
+      position: { x: 180, y: 74, z: 0 },
+      rotation: { yaw: -Math.PI * 0.5 },
+      movementState: 'flying',
+      vehicleKind: null,
+      currentBuilding: null,
+      currentFloor: 1,
+      currentActivity: 'Flying to Emerald Bay',
+      avatar,
+    },
+    t0 + 1000,
+  );
+  assert.ok(airborne);
+  assert.equal(airborne.position.x, 180);
+  assert.equal(airborne.position.y, 74);
+
+  // Landing inside Emerald Bay & moving into Aero Highland retains extended coordinates
+  const landedEmerald = store.updateRemotePlayerState(
+    session.id,
+    'pilot_1',
+    {
+      position: { x: 356, y: 0, z: 0 },
+      rotation: { yaw: 0 },
+      movementState: 'flying',
+      vehicleKind: null,
+      currentBuilding: null,
+      currentFloor: 1,
+      currentActivity: 'Exploring Emerald Bay',
+      avatar,
+    },
+    t0 + 2000,
+  );
+  assert.ok(landedEmerald);
+  assert.equal(landedEmerald.position.x, 356);
+
+  // Landing inside Golden Horizon retains southern extended coordinates (dt=2.5s across bay)
+  const landedGolden = store.updateRemotePlayerState(
+    session.id,
+    'pilot_1',
+    {
+      position: { x: 0, y: 0, z: 280 },
+      rotation: { yaw: 0 },
+      movementState: 'flying',
+      vehicleKind: null,
+      currentBuilding: null,
+      currentFloor: 1,
+      currentActivity: 'Exploring Golden Horizon',
+      avatar,
+    },
+    t0 + 4500,
+  );
+  assert.ok(landedGolden);
+  assert.equal(landedGolden.position.z, 280);
+
+  // City 2, City 3, and City 4 skyscraper elevators work up to Floor 22
+  const elevC2 = store.triggerSessionElevatorAction(
+    session.id,
+    'c2_emerald_tower',
+    'city_tower_elev',
+    'select',
+    22,
+    t0,
+  );
+  assert.ok(elevC2);
+  assert.equal(elevC2.targetFloor, 22);
+
+  const elevC4 = store.triggerSessionElevatorAction(
+    session.id,
+    'c4_golden_spire',
+    'city_tower_elev',
+    'select',
+    22,
+    t0 + 100,
+  );
+  assert.ok(elevC4);
+  assert.equal(elevC4.targetFloor, 22);
+});
+
+test('GameBackendStore maintains a standing active PUBLIC_OPEN_WORLD room for instant real-time multiplayer', () => {
+  const store = new GameBackendStore({ persistPath: null });
+  const snap = store.buildSessionSnapshot(PUBLIC_OPEN_WORLD_SESSION_ID);
+  assert.ok(snap);
+  assert.equal(snap.session.joinCode, PUBLIC_OPEN_WORLD_CODE);
+  assert.equal(snap.session.status, 'active');
+  assert.equal(snap.session.remainingSeconds, 86400);
+
+  // Standing Open-World room cannot be deleted or terminated
+  assert.equal(store.deleteSession(PUBLIC_OPEN_WORLD_SESSION_ID), false);
+  const stillHere = store.buildSessionSnapshot(PUBLIC_OPEN_WORLD_SESSION_ID);
+  assert.ok(stillHere);
+  assert.equal(stillHere.session.status, 'active');
+
+  // Guest and verified players join the same shared Open-World city
+  const p1 = store.joinSession({
+    joinCode: PUBLIC_OPEN_WORLD_CODE,
+    playerId: 'guest:tab_1',
+    displayName: 'Budi',
+  });
+  const p2 = store.joinSession({
+    joinCode: PUBLIC_OPEN_WORLD_CODE,
+    playerId: 'google_uid_siti',
+    displayName: 'Siti',
+  });
+  assert.equal(p1.ok, true);
+  assert.equal(p2.ok, true);
+
+  const afterSnap = store.buildSessionSnapshot(PUBLIC_OPEN_WORLD_SESSION_ID);
+  assert.ok(afterSnap);
+  assert.equal(afterSnap.players.length, 2);
+  assert.ok(afterSnap.players.some((p) => p.playerId === 'guest:tab_1'));
+  assert.ok(afterSnap.players.some((p) => p.playerId === 'google_uid_siti'));
+});
+
+test('GameBackendStore preserves underwater ocean and submarine diving Y coordinates down to seabed', () => {
+  const store = new GameBackendStore({ persistPath: null });
+  store.joinSession({
+    joinCode: PUBLIC_OPEN_WORLD_CODE,
+    playerId: 'diver_1',
+    displayName: 'Nadia',
+  });
+  const avatar = store.buildSessionSnapshot(PUBLIC_OPEN_WORLD_SESSION_ID)!.players[0].avatar;
+  const t0 = Date.now();
+
+  const surfaceSub = store.updateRemotePlayerState(
+    PUBLIC_OPEN_WORLD_SESSION_ID,
+    'diver_1',
+    {
+      position: { x: 145, y: -1.2, z: 56 },
+      rotation: { yaw: 0 },
+      movementState: 'driving',
+      vehicleKind: 'submarine',
+      currentBuilding: null,
+      currentFloor: 1,
+      currentActivity: 'Diving Submarine',
+      avatar,
+    },
+    t0,
+  );
+  assert.ok(surfaceSub);
+  assert.equal(surfaceSub.position.y, -1.2);
+
+  const deepDive = store.updateRemotePlayerState(
+    PUBLIC_OPEN_WORLD_SESSION_ID,
+    'diver_1',
+    {
+      position: { x: 162, y: -12.8, z: 58 },
+      rotation: { yaw: -1.4 },
+      movementState: 'diving',
+      vehicleKind: null,
+      currentBuilding: null,
+      currentFloor: 1,
+      currentActivity: 'Diving Ocean Reef',
+      avatar,
+    },
+    t0 + 2500,
+  );
+  assert.ok(deepDive);
+  assert.equal(deepDive.position.y, -12.8);
+  assert.equal(deepDive.movementState, 'diving');
+});
+
+

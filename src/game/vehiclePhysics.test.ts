@@ -75,4 +75,52 @@ describe('vehiclePhysics & vehicleData', () => {
     const col = resolveCircleAABBCollision(exitPos.x, exitPos.z, 0.42, exitPos.y, 1.78, CITY_LAYOUT);
     assert.equal(col.collided, false, 'exit position must not collide with buildings');
   });
+
+  it('spawns jetski, speedboat, and submarine in bay and enforces non-inverted sub dive/ascend', () => {
+    const vehicles = createInitialVehicles(CITY_LAYOUT);
+    const jetski = vehicles.find((v) => v.kind === 'jetski');
+    const speedboat = vehicles.find((v) => v.kind === 'speedboat');
+    const sub = vehicles.find((v) => v.kind === 'submarine');
+    assert.ok(jetski && speedboat && sub, 'expected marine and submarine vehicles spawned in ocean bay');
+    assert.equal(VEHICLE_SPECS.jetski.domain, 'water');
+    assert.equal(VEHICLE_SPECS.speedboat.domain, 'water');
+    assert.equal(VEHICLE_SPECS.submarine.domain, 'submersible');
+
+    // Accelerate jetski forward and steer left (+yaw)
+    const jetInput = createEmptyDrivingInput();
+    jetInput.accelerate = true;
+    jetInput.steerLeft = true;
+    const initialYaw = jetski!.yaw;
+    for (let i = 0; i < 20; i++) {
+      stepPlayerVehiclePhysics(jetski!, jetInput, 0.04, CITY_LAYOUT);
+    }
+    assert.ok(jetski!.speed > 4, `expected jetski thrust > 4, got ${jetski!.speed}`);
+    assert.ok(jetski!.yaw > initialYaw + 0.05, 'expected non-inverted left rudder turn (+yaw)');
+
+    // Submarine dive (-Y, negative pitch) vs ascend (+Y, positive pitch)
+    const subStartY = sub!.y;
+    const diveInput = createEmptyDrivingInput();
+    diveInput.dive = true;
+    diveInput.accelerate = true;
+    for (let i = 0; i < 45; i++) {
+      stepPlayerVehiclePhysics(sub!, diveInput, 0.04, CITY_LAYOUT);
+    }
+    assert.ok(sub!.y < subStartY - 1.5, `expected submarine to submerge below ${subStartY}, got ${sub!.y}`);
+    assert.ok((sub!.pitch ?? 0) < 0, `expected nose-down pitch (< 0) when diving, got ${sub!.pitch}`);
+
+    // Exiting underwater submarine leaves player safely suspended at dive depth in ocean water
+    const subExit = findSafeVehicleExitPos(sub!, CITY_LAYOUT);
+    assert.ok(subExit.y < -2.0 && subExit.y >= -13.5, `expected underwater exit depth, got ${subExit.y}`);
+
+    const deepY = sub!.y;
+    const ascendInput = createEmptyDrivingInput();
+    ascendInput.ascend = true;
+    ascendInput.accelerate = true;
+    for (let i = 0; i < 30; i++) {
+      stepPlayerVehiclePhysics(sub!, ascendInput, 0.04, CITY_LAYOUT);
+    }
+    assert.ok(sub!.y > deepY + 0.5, `expected submarine to surface (+Y), got ${sub!.y} from ${deepY}`);
+    assert.ok((sub!.pitch ?? 0) > 0, `expected nose-up pitch (> 0) when ascending, got ${sub!.pitch}`);
+  });
 });
+

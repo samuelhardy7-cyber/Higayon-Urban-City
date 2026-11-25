@@ -61,6 +61,8 @@ import {
 import type { CharacterCustomization, InteriorElevatorFloor, VehicleKind } from '../game/types';
 
 export const BOOTSTRAPPED_TEACHER_EMAIL = 'samuelhardy7@gmail.com';
+export const PUBLIC_OPEN_WORLD_CODE = 'OPEN_WORLD';
+export const PUBLIC_OPEN_WORLD_SESSION_ID = 'sess_open_world';
 
 export function validatePinFormat(pin: string): string | null {
   if (typeof pin !== 'string') return 'PIN must be a string.';
@@ -278,7 +280,13 @@ function buildServerElevatorSpecs(
   buildingId: string,
   elevatorId: string,
 ): { floors: InteriorElevatorFloor[] } {
-  if (buildingId === 'freedom_tower' || elevatorId === 'city_tower_elev') {
+  if (
+    buildingId === 'freedom_tower' ||
+    buildingId === 'c2_emerald_tower' ||
+    buildingId === 'c3_aero_observatory' ||
+    buildingId === 'c4_golden_spire' ||
+    elevatorId === 'city_tower_elev'
+  ) {
     const floors: InteriorElevatorFloor[] = [];
     for (let f = 1; f <= CITY_TOWER_FLOOR_COUNT; f++) {
       floors.push({
@@ -306,10 +314,11 @@ export function validatePlayerTransformUpdate(
   nextBuilding: string | null,
   nextVehicle: VehicleKind | null,
   dtSec: number,
+  nextMovementState?: PlayerMovementState,
 ): { x: number; y: number; z: number; clamped: boolean } {
-  const safeX = Number.isFinite(nextPos.x) ? Math.max(-140, Math.min(140, nextPos.x)) : prev.position.x;
-  const safeY = Number.isFinite(nextPos.y) ? Math.max(-5, Math.min(95, nextPos.y)) : prev.position.y;
-  const safeZ = Number.isFinite(nextPos.z) ? Math.max(-140, Math.min(140, nextPos.z)) : prev.position.z;
+  const safeX = Number.isFinite(nextPos.x) ? Math.max(-240, Math.min(520, nextPos.x)) : prev.position.x;
+  const safeY = Number.isFinite(nextPos.y) ? Math.max(-20, Math.min(110, nextPos.y)) : prev.position.y;
+  const safeZ = Number.isFinite(nextPos.z) ? Math.max(-380, Math.min(380, nextPos.z)) : prev.position.z;
 
   // Switching between exterior city and building interior legitimately swaps coordinate space
   if (prev.currentBuilding !== nextBuilding) {
@@ -317,15 +326,16 @@ export function validatePlayerTransformUpdate(
   }
 
   const effectiveDt = Math.max(0.05, Math.min(2.5, dtSec));
-  const maxHorizSpeed = nextVehicle ? 46 : 16; // m/s (with generous latency margin)
-  const maxHorizDist = maxHorizSpeed * effectiveDt + 3.2;
+  const isFlying = nextMovementState === 'flying' || prev.movementState === 'flying';
+  const maxHorizSpeed = isFlying ? 220 : nextVehicle ? 46 : 16; // m/s (with generous latency margin)
+  const maxHorizDist = maxHorizSpeed * effectiveDt + (isFlying ? 18 : 3.2);
 
   const dx = safeX - prev.position.x;
   const dz = safeZ - prev.position.z;
   const horizDist = Math.hypot(dx, dz);
 
   const dy = safeY - prev.position.y;
-  const maxVertDist = 14 * effectiveDt + 2.8;
+  const maxVertDist = (isFlying ? 80 : 14) * effectiveDt + (isFlying ? 10 : 2.8);
   const clampedY =
     Math.abs(dy) > maxVertDist
       ? prev.position.y + Math.sign(dy) * maxVertDist
@@ -382,6 +392,42 @@ export class GameBackendStore {
     if (options?.envPinHash?.includes(':') && !this.pinHash) {
       this.pinHash = options.envPinHash;
     }
+    this.ensurePublicOpenWorldSession();
+  }
+
+  public ensurePublicOpenWorldSession(now = Date.now()): MultiplayerSessionRecord {
+    const existing = this.sessions.get(PUBLIC_OPEN_WORLD_SESSION_ID);
+    if (existing) {
+      existing.status = 'active';
+      existing.maxPlayers = Math.max(64, existing.maxPlayers);
+      existing.remainingSeconds = 86400;
+      if (!this.participantsBySession.has(PUBLIC_OPEN_WORLD_SESSION_ID)) {
+        this.participantsBySession.set(PUBLIC_OPEN_WORLD_SESSION_ID, new Map());
+      }
+      return existing;
+    }
+    const pubSession: MultiplayerSessionRecord = {
+      id: PUBLIC_OPEN_WORLD_SESSION_ID,
+      name: 'Open World City',
+      subject: 'Open World',
+      questionSetId: this.questionDb.questionSets[0]?.id || 'set_city_core',
+      joinCode: PUBLIC_OPEN_WORLD_CODE,
+      maxPlayers: 64,
+      durationMinutes: 1440,
+      objectives:
+        'Explore all 4 connected cities, drive vehicles, fly between airports, and interact with players live!',
+      status: 'active',
+      teacherUid: 'system_open_world',
+      createdAt: now,
+      updatedAt: now,
+      startedAt: now,
+      pausedAt: null,
+      accumulatedPauseMs: 0,
+      remainingSeconds: 86400,
+    };
+    this.sessions.set(PUBLIC_OPEN_WORLD_SESSION_ID, pubSession);
+    this.participantsBySession.set(PUBLIC_OPEN_WORLD_SESSION_ID, new Map());
+    return pubSession;
   }
 
   private loadFromDisk(): void {
@@ -1004,6 +1050,9 @@ export class GameBackendStore {
 
   // --- Multiplayer Sessions ---
   public computeRemainingSeconds(session: MultiplayerSessionRecord, now = Date.now()): number {
+    if (session.id === PUBLIC_OPEN_WORLD_SESSION_ID) {
+      return 86400;
+    }
     const totalMs = session.durationMinutes * 60 * 1000;
     if (session.status === 'waiting') {
       return Math.round(totalMs / 1000);
@@ -1096,6 +1145,7 @@ export class GameBackendStore {
   }
 
   public deleteSession(sessionId: string): boolean {
+    if (sessionId === PUBLIC_OPEN_WORLD_SESSION_ID) return false;
     const existed = this.sessions.delete(sessionId);
     this.participantsBySession.delete(sessionId);
     if (existed) this.saveToDisk();
@@ -1338,17 +1388,30 @@ export class GameBackendStore {
     }
 
     if (session.status === 'ended') {
-      return {
-        ok: false,
-        code: 'SESSION_ENDED',
-        message: 'This multiplayer session has already ended.',
-      };
+      if (session.id === PUBLIC_OPEN_WORLD_SESSION_ID) {
+        session.status = 'active';
+      } else {
+        return {
+          ok: false,
+          code: 'SESSION_ENDED',
+          message: 'This multiplayer session has already ended.',
+        };
+      }
     }
 
     let roster = this.participantsBySession.get(session.id);
     if (!roster) {
       roster = new Map();
       this.participantsBySession.set(session.id, roster);
+    }
+
+    // Prune stale offline guest entries in Open World so slots stay fresh
+    if (session.id === PUBLIC_OPEN_WORLD_SESSION_ID) {
+      for (const [pid, p] of roster.entries()) {
+        if (p.connectionStatus === 'offline' && now - p.updatedAt > 20 * 60_000) {
+          roster.delete(pid);
+        }
+      }
     }
 
     const existing = roster.get(params.playerId);
@@ -1434,6 +1497,7 @@ export class GameBackendStore {
       patch.currentBuilding,
       patch.vehicleKind,
       dtSec,
+      patch.movementState,
     );
 
     player.position = {

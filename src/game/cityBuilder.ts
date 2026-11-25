@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { buildExteriorEntranceDoor, type ExteriorDoorRig } from './interiorBuilder';
 import type { CityTextures } from './textures';
 import type { BuildingSpec, CityLayout, HouseSpec, ParkedVehicleSpec } from './types';
+import { getSingleBridgeHeight, OCEAN_SEABED_Y, WATER_SURFACE_Y } from './worldData';
 
 export interface BuiltCity {
   group: THREE.Group;
+  skyDome: THREE.Mesh;
   animatedWaterMeshes: THREE.Mesh[];
   bayWater: THREE.Mesh;
   skyUniforms: {
@@ -29,8 +31,35 @@ export function buildCityScene(
   const group = new THREE.Group();
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
+  const texturesToDispose: THREE.Texture[] = [];
   const animatedWaterMeshes: THREE.Mesh[] = [];
   const buildingWindowMats: THREE.MeshStandardMaterial[] = [];
+  const landmarkSpinners: Array<{
+    obj: THREE.Object3D;
+    speed: number;
+    bobBaseY?: number;
+    bobAmp?: number;
+  }> = [];
+  const underwaterFishSchools: Array<{
+    pivot: THREE.Group;
+    speed: number;
+    phase: number;
+    fishFins: THREE.Mesh[];
+  }> = [];
+  const underwaterMantas: Array<{
+    group: THREE.Group;
+    centerX: number;
+    centerZ: number;
+    radiusX: number;
+    radiusZ: number;
+    baseY: number;
+    speed: number;
+    phase: number;
+    wingL: THREE.Mesh;
+    wingR: THREE.Mesh;
+  }> = [];
+  const underwaterKelp: Array<{ mesh: THREE.Mesh; phase: number; speed: number }> = [];
+  const underwaterBubbles: Array<{ mesh: THREE.Mesh; baseY: number; phase: number; speed: number }> = [];
 
   const trackGeo = <T extends THREE.BufferGeometry>(g: T): T => {
     geometries.push(g);
@@ -40,15 +69,19 @@ export function buildCityScene(
     materials.push(m);
     return m;
   };
+  const trackTex = <T extends THREE.Texture>(t: T): T => {
+    texturesToDispose.push(t);
+    return t;
+  };
 
-  // 1. Sky Dome (horizon-matched gradient shader updated by TimeOfDay)
+  // 1. Sky Dome (horizon-matched gradient shader updated by TimeOfDay, follows player)
   const skyUniforms = {
     topColor: { value: new THREE.Color(0x4c8fd6) },
     horizonColor: { value: new THREE.Color(0xd7e9f6) },
     sunColor: { value: new THREE.Color(0xfff5db) },
     sunDir: { value: new THREE.Vector3(0.52, 0.72, 0.42).normalize() },
   };
-  const skyGeo = trackGeo(new THREE.SphereGeometry(470, 24, 16));
+  const skyGeo = trackGeo(new THREE.SphereGeometry(1650, 28, 18));
   const skyMat = trackMat(
     new THREE.ShaderMaterial({
       side: THREE.BackSide,
@@ -70,7 +103,7 @@ export function buildCityScene(
         uniform vec3 sunColor;
         uniform vec3 sunDir;
         void main() {
-          vec3 dir = normalize(vWorldPos);
+          vec3 dir = normalize(vWorldPos - cameraPosition);
           float h = clamp(dir.y, 0.0, 1.0);
           vec3 col = mix(horizonColor, topColor, pow(h, 0.56));
           float sunDot = max(dot(dir, sunDir), 0.0);
@@ -80,52 +113,111 @@ export function buildCityScene(
       `,
     }),
   );
-  group.add(new THREE.Mesh(skyGeo, skyMat));
+  const skyDome = new THREE.Mesh(skyGeo, skyMat);
+  group.add(skyDome);
 
-  // 2. Outer Rolling Parkland, Distant Hills & Freedom Bay Ocean
+  // 2. Global Ocean Surface, Deep Seabed, Island Land Bases, Distant Mainland & Hills
+  const bayMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x16749a,
+      roughness: 0.14,
+      metalness: 0.28,
+      transparent: true,
+      opacity: 0.78,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  const bayWater = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(2200, 2200, 1, 1)), bayMat);
+  bayWater.rotation.x = -Math.PI / 2;
+  bayWater.position.set(140, WATER_SURFACE_Y, 0);
+  bayWater.receiveShadow = enableShadows;
+  group.add(bayWater);
+
+  // Sandy Deep Ocean Floor (y = OCEAN_SEABED_Y = -13.5)
+  const seabedSandMat = trackMat(
+    new THREE.MeshStandardMaterial({ color: 0xb9a882, roughness: 0.96, metalness: 0.0 }),
+  );
+  const seabedFloor = new THREE.Mesh(
+    trackGeo(new THREE.PlaneGeometry(1400, 1400, 1, 1)),
+    seabedSandMat,
+  );
+  seabedFloor.rotation.x = -Math.PI / 2;
+  seabedFloor.position.set(140, OCEAN_SEABED_Y - 0.18, 0);
+  seabedFloor.receiveShadow = enableShadows;
+  group.add(seabedFloor);
+
   const outerLandMat = trackMat(
     new THREE.MeshStandardMaterial({ color: 0x5c8252, roughness: 0.94 }),
   );
-  const outerLand = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(760, 760)), outerLandMat);
-  outerLand.rotation.x = -Math.PI / 2;
-  outerLand.position.set(-280, -0.08, 0);
-  outerLand.receiveShadow = enableShadows;
-  group.add(outerLand);
+  const seawallEdgeMat = trackMat(
+    new THREE.MeshStandardMaterial({ color: 0x808790, roughness: 0.86 }),
+  );
+  const underwaterRockWallMat = trackMat(
+    new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.92 }),
+  );
+
+  // Island embankments under each city (extending down to seabed so underwater views look solid)
+  for (const city of layout.cities) {
+    const cw = city.landMaxX - city.landMinX + 4;
+    const cd = city.landMaxZ - city.landMaxZ === 0 ? city.landMaxZ - city.landMinZ + 4 : city.landMaxZ - city.landMinZ + 4;
+    const cx = (city.landMinX + city.landMaxX) * 0.5;
+    const cz = (city.landMinZ + city.landMaxZ) * 0.5;
+    const islandSlab = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(cw, 0.9, cd)), seawallEdgeMat);
+    islandSlab.position.set(cx, -0.49, cz);
+    islandSlab.receiveShadow = enableShadows;
+    group.add(islandSlab);
+
+    const islandDeepBase = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(cw - 1.5, 13.6, cd - 1.5)),
+      underwaterRockWallMat,
+    );
+    islandDeepBase.position.set(cx, -7.5, cz);
+    group.add(islandDeepBase);
+
+    const grassCap = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(cw - 1.2, cd - 1.2)), outerLandMat);
+    grassCap.rotation.x = -Math.PI / 2;
+    grassCap.position.set(cx, -0.025, cz);
+    grassCap.receiveShadow = enableShadows;
+    group.add(grassCap);
+  }
+
+  // Far-West, Far-North & Far-South Horizon Parkland + Rolling Hills (clear of channels, bridges & airports)
+  const westParkland = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(260, 1300)), outerLandMat);
+  westParkland.rotation.x = -Math.PI / 2;
+  westParkland.position.set(-360, -0.1, 0);
+  group.add(westParkland);
 
   const hillMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x42663f, roughness: 0.94 }));
   const hillGeo = trackGeo(
     new THREE.SphereGeometry(48, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.5),
   );
   const hillCoords: Array<[number, number, number, number]> = [
-    [-195, -160, 1.5, 0.46],
-    [-215, -55, 1.8, 0.52],
-    [-200, 75, 1.6, 0.48],
-    [-165, 190, 1.5, 0.42],
-    [-75, -220, 1.7, 0.44],
-    [38, -225, 1.5, 0.38],
-    [-65, 220, 1.6, 0.42],
-    [45, 215, 1.4, 0.36],
+    [-295, -240, 1.5, 0.46],
+    [-310, -80, 1.8, 0.52],
+    [-285, 65, 1.6, 0.48],
+    [-295, 290, 1.6, 0.44],
+    [-95, -455, 1.7, 0.44],
+    [45, -460, 1.5, 0.38],
+    [-65, 455, 1.6, 0.42],
+    [55, 460, 1.5, 0.38],
+    [310, -210, 1.4, 0.36],
   ];
   for (const [hx, hz, sx, sy] of hillCoords) {
     const hill = new THREE.Mesh(hillGeo, hillMat);
-    hill.position.set(hx, -0.25, hz);
+    hill.position.set(hx, -0.35, hz);
     hill.scale.set(sx, sy, sx * 1.15);
     group.add(hill);
   }
 
-  // Bay Ocean on East (x > 95)
-  const bayMat = trackMat(
-    new THREE.MeshStandardMaterial({ color: 0x22698f, roughness: 0.16, metalness: 0.36 }),
-  );
-  const bayWater = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(460, 820, 1, 1)), bayMat);
-  bayWater.rotation.x = -Math.PI / 2;
-  bayWater.position.set(326, -0.38, 0);
-  bayWater.receiveShadow = enableShadows;
-  group.add(bayWater);
-
-  // Distant Harbor Lighthouse
+  // Distant Harbor Lighthouse (with submerged reef rock foundation down to seabed)
   const lhGroup = new THREE.Group();
-  lhGroup.position.set(170, -0.4, -52);
+  lhGroup.position.set(170, -0.4, -56);
+  const lhSubBase = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(8.5, 13.5, 14.0, 10)),
+    underwaterRockWallMat,
+  );
+  lhSubBase.position.y = -6.5;
   const lhRock = new THREE.Mesh(
     trackGeo(new THREE.CylinderGeometry(7, 10, 3.2, 8)),
     trackMat(new THREE.MeshStandardMaterial({ color: 0x6c7278, roughness: 0.92 })),
@@ -147,10 +239,10 @@ export function buildCityScene(
     ),
   );
   lhBeacon.position.y = 19.2;
-  lhGroup.add(lhRock, lhTower, lhBeacon);
+  lhGroup.add(lhSubBase, lhRock, lhTower, lhBeacon);
   group.add(lhGroup);
 
-  // 2B. Outer Panorama Skyline Ring, City International Airport (NW), Cargo Freighter & Sailboats
+  // 2B. Outer Decorative Skyline Silhouette (far west, north & south outer horizons)
   const distBuildingMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0x64748b,
@@ -165,106 +257,411 @@ export function buildCityScene(
   buildingWindowMats.push(distBuildingMat);
 
   const outerTowers: Array<[number, number, number, number, number]> = [
-    [-124, -40, 14, 14, 42],
-    [-132, -8, 16, 16, 56],
-    [-122, 32, 14, 14, 34],
-    [-135, 76, 15, 15, 28],
-    [-70, -124, 15, 15, 48],
-    [-28, -126, 18, 16, 64],
-    [18, -122, 16, 16, 44],
-    [62, -126, 14, 14, 32],
-    [-68, 122, 15, 15, 36],
-    [-22, 124, 16, 14, 40],
-    [28, 122, 15, 15, 30],
-    [72, 120, 14, 14, 24],
+    [-250, -52, 14, 14, 42],
+    [-260, -10, 16, 16, 56],
+    [-248, 36, 14, 14, 34],
+    [-262, 76, 15, 15, 28],
+    [-42, -412, 16, 16, 48],
+    [12, -418, 18, 16, 62],
+    [66, -412, 14, 14, 36],
+    [-40, 412, 16, 15, 44],
+    [14, 418, 18, 16, 54],
+    [64, 410, 14, 14, 38],
   ];
   for (const [ox, oz, ow, od, oh] of outerTowers) {
     const tMesh = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(ow, oh, od)), distBuildingMat);
-    tMesh.position.set(ox, oh * 0.5 - 0.05, oz);
+    tMesh.position.set(ox, oh * 0.5 - 0.1, oz);
     group.add(tMesh);
   }
 
-  // City International Airport (North-West Horizon around -145, -135)
-  const airportGroup = new THREE.Group();
-  airportGroup.position.set(-148, 0, -142);
-
+  // 2C. International Airports (Tarmac Aprons, Runways, Connectors, Ribbed Hangars, Lathe ATC Towers, Swept-Wing Gate Jets)
+  const roadMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: textures.asphaltMap,
+      bumpMap: textures.asphaltBump,
+      bumpScale: 0.035,
+      roughness: 0.88,
+      metalness: 0.04,
+    }),
+  );
   const apronMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x2b313a, roughness: 0.88 }));
-  const apron = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(140, 62)), apronMat);
-  apron.rotation.x = -Math.PI / 2;
-  apron.position.y = 0.02;
-  airportGroup.add(apron);
-
   const runwayStripeMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.6 }));
-  for (let rx = -58; rx <= 58; rx += 9) {
-    const dash = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(4.6, 0.48)), runwayStripeMat);
-    dash.rotation.x = -Math.PI / 2;
-    dash.position.set(rx, 0.05, 8);
-    airportGroup.add(dash);
+  const hangarMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.55, metalness: 0.42 }));
+  const atcShaftMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xdbe2e8, roughness: 0.48, metalness: 0.15 }));
+  const atcCabMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0ea5e9,
+      emissiveIntensity: 0.35,
+      roughness: 0.14,
+      metalness: 0.62,
+    }),
+  );
+  const atcRadarMat = trackMat(
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, emissive: 0xfef08a, emissiveIntensity: 0.55 }),
+  );
+  const jetWhiteMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.24, metalness: 0.32 }));
+  const jetTailMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.34 }));
+  const jetDarkMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.42, metalness: 0.68 }));
+  const boardingBeaconMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0ea5e9,
+      emissiveIntensity: 0.85,
+      roughness: 0.3,
+    }),
+  );
+  const atcRadars: THREE.Mesh[] = [];
+  const atcShaftProfile = [
+    new THREE.Vector2(3.1, 0),
+    new THREE.Vector2(2.7, 2.2),
+    new THREE.Vector2(1.9, 5.5),
+    new THREE.Vector2(1.55, 14.5),
+    new THREE.Vector2(2.05, 19.8),
+    new THREE.Vector2(2.85, 22.0),
+  ];
+  const sharedAtcShaftGeo = trackGeo(new THREE.LatheGeometry(atcShaftProfile, 12));
+
+  for (const ap of layout.airports) {
+    const apW = ap.apronMaxX - ap.apronMinX;
+    const apD = ap.apronMaxZ - ap.apronMinZ;
+    const apCx = (ap.apronMinX + ap.apronMaxX) * 0.5;
+    const apCz = (ap.apronMinZ + ap.apronMaxZ) * 0.5;
+
+    // Concrete reclamation slab beneath airport apron so it sits cleanly above ocean
+    const apFoundation = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(apW + 6, 0.9, apD + 6)),
+      seawallEdgeMat,
+    );
+    apFoundation.position.set(apCx, -0.47, apCz);
+    apFoundation.receiveShadow = enableShadows;
+    group.add(apFoundation);
+
+    const apron = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(apW, apD)), apronMat);
+    apron.rotation.x = -Math.PI / 2;
+    apron.position.set(apCx, 0.02, apCz);
+    apron.receiveShadow = enableShadows;
+    group.add(apron);
+
+    // Connector roads linking airport apron cleanly to host city grid
+    for (const cr of ap.connectorRects) {
+      const cw = cr.maxX - cr.minX;
+      const cd = cr.maxZ - cr.minZ;
+      const ccx = (cr.minX + cr.maxX) * 0.5;
+      const ccz = (cr.minZ + cr.maxZ) * 0.5;
+      const roadSlab = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(cw + 1.5, 0.85, cd + 1.5)), seawallEdgeMat);
+      roadSlab.position.set(ccx, -0.44, ccz);
+      const roadTop = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(cw, cd)), roadMat);
+      roadTop.rotation.x = -Math.PI / 2;
+      roadTop.position.set(ccx, 0.015, ccz);
+      roadTop.receiveShadow = enableShadows;
+      group.add(roadSlab, roadTop);
+    }
+
+    // Runway centerline dashes & threshold stripes
+    const rLen = ap.runwayEndX - ap.runwayStartX;
+    const rMidX = (ap.runwayStartX + ap.runwayEndX) * 0.5;
+    for (let rx = -rLen * 0.44; rx <= rLen * 0.44; rx += 9) {
+      const dash = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(4.6, 0.48)), runwayStripeMat);
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.set(rMidX + rx, 0.05, ap.runwayZ);
+      group.add(dash);
+    }
+    for (let tz = -4; tz <= 4; tz += 2) {
+      const th1 = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(3.2, 0.65)), runwayStripeMat);
+      th1.rotation.x = -Math.PI / 2;
+      th1.position.set(ap.runwayStartX + 4, 0.05, ap.runwayZ + tz);
+      const th2 = th1.clone();
+      th2.position.x = ap.runwayEndX - 4;
+      group.add(th1, th2);
+    }
+
+    // Align ATC & Hangar to the enterable terminal BuildingSpec (terminal itself is rendered by buildUrbanBuilding)
+    const term = layout.buildings.find((b) => b.id === ap.terminalBuildingId);
+    const atcX = term ? term.x - 28 : ap.centerX - 34;
+    const atcZ = term ? term.z : ap.centerZ - 16;
+    const hangarX = term ? term.x + 40 : ap.centerX + 34;
+    const hangarZ = term ? term.z + 2 : ap.centerZ - 14;
+
+    const hangarGroup = new THREE.Group();
+    hangarGroup.position.set(hangarX, 0, hangarZ);
+    const hangar = new THREE.Mesh(
+      trackGeo(new THREE.CylinderGeometry(9, 9, 22, 16, 1, false, 0, Math.PI)),
+      hangarMat,
+    );
+    hangar.rotation.z = Math.PI * 0.5;
+    hangar.castShadow = enableShadows;
+    hangarGroup.add(hangar);
+    const ribGeo = trackGeo(new THREE.TorusGeometry(9.12, 0.22, 6, 18, Math.PI));
+    for (const rx of [-8.5, 0, 8.5]) {
+      const rib = new THREE.Mesh(ribGeo, atcCabMat);
+      rib.rotation.y = Math.PI * 0.5;
+      rib.position.x = rx;
+      hangarGroup.add(rib);
+    }
+    group.add(hangarGroup);
+
+    const atcShaft = new THREE.Mesh(sharedAtcShaftGeo, atcShaftMat);
+    atcShaft.position.set(atcX, 0, atcZ);
+    atcShaft.castShadow = enableShadows;
+    const atcCab = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(4.2, 2.85, 4.0, 12)), atcCabMat);
+    atcCab.position.set(atcX, 24.0, atcZ);
+    const atcCap = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(1.8, 4.4, 1.4, 12)), atcShaftMat);
+    atcCap.position.set(atcX, 26.6, atcZ);
+    const atcRadar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(4.8, 0.72, 0.48)), atcRadarMat);
+    atcRadar.position.set(atcX, 27.9, atcZ);
+    atcRadars.push(atcRadar);
+    group.add(atcShaft, atcCab, atcCap, atcRadar);
+
+    // Swept-Wing Passenger Jetliner at Gate + Boarding Zone Beacon Ring
+    const parkedJet = new THREE.Group();
+    parkedJet.position.set(ap.gateJetX, 1.85, ap.gateJetZ);
+    parkedJet.rotation.y = ap.gateJetYaw;
+    const jetFuse = new THREE.Mesh(trackGeo(new THREE.CapsuleGeometry(1.18, 13.8, 6, 12)), jetWhiteMat);
+    jetFuse.rotation.z = Math.PI * 0.5;
+    jetFuse.castShadow = enableShadows;
+    const jetNose = new THREE.Mesh(trackGeo(new THREE.ConeGeometry(1.12, 2.6, 12)), jetWhiteMat);
+    jetNose.rotation.z = -Math.PI * 0.5;
+    jetNose.position.set(8.0, -0.05, 0);
+    const wingL = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.6, 0.2, 7.6)), jetWhiteMat);
+    wingL.position.set(-0.6, -0.25, -4.1);
+    wingL.rotation.y = 0.26;
+    wingL.castShadow = enableShadows;
+    const wingR = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.6, 0.2, 7.6)), jetWhiteMat);
+    wingR.position.set(-0.6, -0.25, 4.1);
+    wingR.rotation.y = -0.26;
+    wingR.castShadow = enableShadows;
+    const jetTail = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.5, 3.6, 0.25)), jetTailMat);
+    jetTail.position.set(-6.5, 1.95, 0);
+    jetTail.rotation.z = 0.28;
+    const jetHTail = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.5, 0.16, 4.8)), jetWhiteMat);
+    jetHTail.position.set(-6.7, 0.45, 0);
+    const jetEngGeo = trackGeo(new THREE.CylinderGeometry(0.46, 0.4, 1.75, 10));
+    for (const ez of [-3.6, 3.6]) {
+      const eng = new THREE.Mesh(jetEngGeo, jetDarkMat);
+      eng.rotation.z = Math.PI * 0.5;
+      eng.position.set(0.0, -0.65, ez);
+      parkedJet.add(eng);
+    }
+    parkedJet.add(jetFuse, jetNose, wingL, wingR, jetTail, jetHTail);
+    group.add(parkedJet);
+
+    const boardingRing = new THREE.Mesh(
+      trackGeo(new THREE.RingGeometry(4.8, 5.4, 24)),
+      boardingBeaconMat,
+    );
+    boardingRing.rotation.x = -Math.PI / 2;
+    boardingRing.position.set(ap.gateJetX, 0.05, ap.gateJetZ);
+    group.add(boardingRing);
   }
-  for (let tz = -4; tz <= 4; tz += 2) {
-    const th = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(3.2, 0.65)), runwayStripeMat);
-    th.rotation.x = -Math.PI / 2;
-    th.position.set(-63, 0.05, 8 + tz);
-    const th2 = th.clone();
-    th2.position.x = 63;
-    airportGroup.add(th, th2);
+
+  // 2D. Intercity Suspension Bridges (Grand Harbor East Bridge + Northern Aero Skyway Bridge)
+  const bridgeAsphaltMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x2f353d,
+      map: textures.asphaltMap,
+      roughness: 0.86,
+    }),
+  );
+  const bridgeConcreteMat = trackMat(
+    new THREE.MeshStandardMaterial({ color: 0xb8c0c8, roughness: 0.72, metalness: 0.1 }),
+  );
+  const bridgeSteelMat = trackMat(
+    new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.34, metalness: 0.74 }),
+  );
+
+  for (const br of layout.bridges) {
+    const segCount = 16;
+    const spanLen = br.end - br.start;
+    const segStep = spanLen / segCount;
+    const isX = br.axis === 'x';
+    const cableMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: br.cableColor,
+        emissive: br.cableColor,
+        emissiveIntensity: 0.25,
+        roughness: 0.3,
+        metalness: 0.65,
+      }),
+    );
+
+    for (let s = 0; s < segCount; s++) {
+      const a0 = br.start + s * segStep;
+      const a1 = br.start + (s + 1) * segStep;
+      const aMid = (a0 + a1) * 0.5;
+      const y0 = getSingleBridgeHeight(a0, br);
+      const y1 = getSingleBridgeHeight(a1, br);
+      const yMid = (y0 + y1) * 0.5;
+      const segLength = Math.hypot(segStep, y1 - y0) + 0.12;
+      const slope = Math.atan2(y1 - y0, segStep);
+
+      const segGroup = new THREE.Group();
+      if (isX) {
+        segGroup.position.set(aMid, yMid, br.crossCenter);
+        segGroup.rotation.z = slope;
+      } else {
+        segGroup.position.set(br.crossCenter, yMid, aMid);
+        segGroup.rotation.x = -slope;
+      }
+
+      const roadDeck = new THREE.Mesh(
+        trackGeo(
+          new THREE.BoxGeometry(
+            isX ? segLength : br.roadWidth,
+            0.35,
+            isX ? br.roadWidth : segLength,
+          ),
+        ),
+        bridgeAsphaltMat,
+      );
+      roadDeck.position.y = -0.175;
+      roadDeck.receiveShadow = enableShadows;
+      segGroup.add(roadDeck);
+
+      // Center yellow dashed strip
+      const dash = new THREE.Mesh(
+        trackGeo(new THREE.BoxGeometry(isX ? segLength * 0.55 : 0.22, 0.03, isX ? 0.22 : segLength * 0.55)),
+        trackMat(new THREE.MeshStandardMaterial({ color: 0xe6b23a, roughness: 0.7 })),
+      );
+      dash.position.y = 0.02;
+      segGroup.add(dash);
+
+      // Raised twin pedestrian walkways + outer steel guardrails
+      for (const side of [-1, 1]) {
+        const swOffset = side * (br.roadWidth * 0.5 + br.sidewalkWidth * 0.5);
+        const swMesh = new THREE.Mesh(
+          trackGeo(
+            new THREE.BoxGeometry(
+              isX ? segLength : br.sidewalkWidth,
+              0.38,
+              isX ? br.sidewalkWidth : segLength,
+            ),
+          ),
+          bridgeConcreteMat,
+        );
+        swMesh.position.set(isX ? 0 : swOffset, 0.02, isX ? swOffset : 0);
+        swMesh.receiveShadow = enableShadows;
+        segGroup.add(swMesh);
+
+        const railOffset = side * (br.roadWidth * 0.5 + br.sidewalkWidth - 0.14);
+        const railBar = new THREE.Mesh(
+          trackGeo(new THREE.BoxGeometry(isX ? segLength : 0.16, 1.05, isX ? 0.16 : segLength)),
+          bridgeSteelMat,
+        );
+        railBar.position.set(isX ? 0 : railOffset, 0.65, isX ? railOffset : 0);
+        segGroup.add(railBar);
+      }
+
+      group.add(segGroup);
+    }
+
+    // Twin suspension pylons + pier foundations + main cables
+    const towerHalfSpan = br.roadWidth * 0.5 + br.sidewalkWidth + 0.5;
+    const towerHeight = br.deckHeight + 21;
+    const pylonGeo = trackGeo(new THREE.BoxGeometry(1.6, towerHeight + 15.5, 1.6));
+    const crossBeamGeo = trackGeo(
+      new THREE.BoxGeometry(
+        isX ? 1.4 : towerHalfSpan * 2 + 1.4,
+        1.4,
+        isX ? towerHalfSpan * 2 + 1.4 : 1.4,
+      ),
+    );
+    const beaconGeo = trackGeo(new THREE.SphereGeometry(0.42, 8, 8));
+
+    for (const tp of br.towerPositions) {
+      const tg = new THREE.Group();
+      tg.position.set(isX ? tp : br.crossCenter, 0, isX ? br.crossCenter : tp);
+
+      for (const side of [-1, 1]) {
+        const pylon = new THREE.Mesh(pylonGeo, bridgeConcreteMat);
+        pylon.position.set(
+          isX ? 0 : side * towerHalfSpan,
+          (towerHeight - 14.5) * 0.5,
+          isX ? side * towerHalfSpan : 0,
+        );
+        pylon.castShadow = enableShadows;
+        tg.add(pylon);
+
+        const beacon = new THREE.Mesh(beaconGeo, cableMat);
+        beacon.position.set(
+          isX ? 0 : side * towerHalfSpan,
+          towerHeight + 0.35,
+          isX ? side * towerHalfSpan : 0,
+        );
+        tg.add(beacon);
+      }
+
+      for (const by of [towerHeight * 0.58, towerHeight - 1.6]) {
+        const crossBeam = new THREE.Mesh(crossBeamGeo, bridgeConcreteMat);
+        crossBeam.position.y = by;
+        tg.add(crossBeam);
+      }
+
+      group.add(tg);
+    }
+
+    // Parabolic main suspension cables & vertical hanger rods
+    const cablePts = 14;
+    const t0 = br.towerPositions[0];
+    const t1 = br.towerPositions[1];
+    const getCableY = (pos: number): number => {
+      if (pos <= t0) {
+        const u = (pos - br.start) / Math.max(1, t0 - br.start);
+        return br.deckHeight + 1.2 + Math.pow(u, 1.45) * (towerHeight - br.deckHeight - 1.5);
+      }
+      if (pos >= t1) {
+        const u = (br.end - pos) / Math.max(1, br.end - t1);
+        return br.deckHeight + 1.2 + Math.pow(u, 1.45) * (towerHeight - br.deckHeight - 1.5);
+      }
+      const midT = (pos - t0) / Math.max(1, t1 - t0);
+      const sag = Math.sin(midT * Math.PI) * 11.5;
+      return towerHeight - 0.3 - sag;
+    };
+
+    for (const side of [-1, 1]) {
+      const lateral = side * towerHalfSpan;
+      for (let c = 0; c < cablePts; c++) {
+        const p0 = br.start + (c / cablePts) * spanLen;
+        const p1 = br.start + ((c + 1) / cablePts) * spanLen;
+        const cy0 = getCableY(p0);
+        const cy1 = getCableY(p1);
+        const pMid = (p0 + p1) * 0.5;
+        const cyMid = (cy0 + cy1) * 0.5;
+        const cLen = Math.hypot(p1 - p0, cy1 - cy0) + 0.08;
+        const cSlope = Math.atan2(cy1 - cy0, p1 - p0);
+
+        const seg = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.14, 0.14, cLen, 6)), cableMat);
+        if (isX) {
+          seg.position.set(pMid, cyMid, br.crossCenter + lateral);
+          seg.rotation.z = Math.PI * 0.5 + cSlope;
+        } else {
+          seg.position.set(br.crossCenter + lateral, cyMid, pMid);
+          seg.rotation.x = Math.PI * 0.5 - cSlope;
+        }
+        group.add(seg);
+
+        if (c > 0 && c < cablePts) {
+          const deckY = getSingleBridgeHeight(p0, br);
+          const rodH = Math.max(0.5, cy0 - deckY);
+          const rod = new THREE.Mesh(
+            trackGeo(new THREE.CylinderGeometry(0.05, 0.05, rodH, 5)),
+            bridgeSteelMat,
+          );
+          rod.position.set(
+            isX ? p0 : br.crossCenter + lateral,
+            deckY + rodH * 0.5,
+            isX ? br.crossCenter + lateral : p0,
+          );
+          group.add(rod);
+        }
+      }
+    }
   }
 
-  const termBody = new THREE.Mesh(
-    trackGeo(new THREE.BoxGeometry(36, 9, 14)),
-    trackMat(new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.45 })),
-  );
-  termBody.position.set(-6, 4.5, -16);
-  const termGlass = new THREE.Mesh(
-    trackGeo(new THREE.BoxGeometry(34, 6.2, 14.3)),
-    trackMat(new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.15, metalness: 0.6, emissive: 0x0284c7, emissiveIntensity: 0.2 })),
-  );
-  termGlass.position.set(-6, 4.8, -16);
-  const hangar = new THREE.Mesh(
-    trackGeo(new THREE.CylinderGeometry(9, 9, 22, 12, 1, false, 0, Math.PI)),
-    trackMat(new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.65, metalness: 0.35 })),
-  );
-  hangar.rotation.z = Math.PI * 0.5;
-  hangar.position.set(34, 0, -14);
-  airportGroup.add(termBody, termGlass, hangar);
-
-  // ATC Control Tower + Spinning Radar
-  const atcShaft = new THREE.Mesh(
-    trackGeo(new THREE.CylinderGeometry(1.8, 2.5, 22, 8)),
-    trackMat(new THREE.MeshStandardMaterial({ color: 0xdbe2e8, roughness: 0.55 })),
-  );
-  atcShaft.position.set(-34, 11, -16);
-  const atcCab = new THREE.Mesh(
-    trackGeo(new THREE.CylinderGeometry(4.0, 2.8, 4.2, 8)),
-    trackMat(new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.35, roughness: 0.18, metalness: 0.55 })),
-  );
-  atcCab.position.set(-34, 23.6, -16);
-  const atcRadar = new THREE.Mesh(
-    trackGeo(new THREE.BoxGeometry(4.4, 0.65, 0.45)),
-    trackMat(new THREE.MeshStandardMaterial({ color: 0xf8fafc, emissive: 0xfef08a, emissiveIntensity: 0.5 })),
-  );
-  atcRadar.position.set(-34, 26.8, -16);
-  airportGroup.add(atcShaft, atcCab, atcRadar);
-
-  // Parked Jetliner at Gate
-  const parkedJet = new THREE.Group();
-  parkedJet.position.set(-4, 1.8, -3);
-  parkedJet.rotation.y = 0.28;
-  const jetWhiteMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.25, metalness: 0.3 }));
-  const jetTailMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.35 }));
-  const jetFuse = new THREE.Mesh(trackGeo(new THREE.CapsuleGeometry(1.15, 13.5, 6, 12)), jetWhiteMat);
-  jetFuse.rotation.z = Math.PI * 0.5;
-  const jetWing = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.2, 0.22, 14.5)), jetWhiteMat);
-  jetWing.position.set(-0.5, -0.25, 0);
-  const jetTail = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.4, 3.2, 0.25)), jetTailMat);
-  jetTail.position.set(-6.4, 1.8, 0);
-  parkedJet.add(jetFuse, jetWing, jetTail);
-  airportGroup.add(parkedJet);
-  group.add(airportGroup);
-
-  // Bay Ocean Ships (Cargo Freighter near Harbor + 3 Animated Coastal Sailboats)
+  // Bay Ocean Ships (Cargo Freighter near Harbor + 3 Animated Coastal Sailboats, positioned clear of bridges)
   const cargoShip = new THREE.Group();
-  cargoShip.position.set(138, -0.1, -50);
+  cargoShip.position.set(148, -0.1, -60);
   const hullMesh = new THREE.Mesh(
     trackGeo(new THREE.BoxGeometry(10.5, 4.0, 36)),
     trackMat(new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: 0.7 })),
@@ -289,9 +686,11 @@ export function buildCityScene(
 
   const sailboats: Array<{ group: THREE.Group; baseY: number; phase: number }> = [];
   const boatCoords: Array<[number, number, number, number]> = [
-    [146, 22, 0.4, 0xef4444],
-    [164, 58, -0.6, 0x0ea5e9],
-    [186, 86, 0.9, 0xf59e0b],
+    [146, 26, 0.4, 0xef4444],
+    [182, 58, -0.6, 0x0ea5e9],
+    [194, -54, 0.9, 0xf59e0b],
+    [142, 224, -0.4, 0xf97316],
+    [-148, 168, 0.7, 0xeab308],
   ];
   for (let i = 0; i < boatCoords.length; i++) {
     const [bx, bz, yaw, accentCol] = boatCoords[i];
@@ -322,21 +721,18 @@ export function buildCityScene(
     sailboats.push({ group: sb, baseY: -0.22, phase: i * 1.9 });
   }
 
-  // 3. Asphalt Road Base (y = 0) + Markings + Crosswalks
-  const roadMat = trackMat(
-    new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: textures.asphaltMap,
-      bumpMap: textures.asphaltBump,
-      bumpScale: 0.035,
-      roughness: 0.88,
-      metalness: 0.04,
-    }),
-  );
-  const asphaltBase = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(196, 196)), roadMat);
-  asphaltBase.rotation.x = -Math.PI / 2;
-  asphaltBase.receiveShadow = enableShadows;
-  group.add(asphaltBase);
+  // 3. Multi-City Asphalt Road Bases (y = 0) + Markings + Crosswalks
+  for (const city of layout.cities) {
+    const w = city.landMaxX - city.landMinX;
+    const d = city.landMaxZ - city.landMinZ;
+    const cx = (city.landMinX + city.landMaxX) * 0.5;
+    const cz = (city.landMinZ + city.landMaxZ) * 0.5;
+    const cityAsphalt = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(w, d)), roadMat);
+    cityAsphalt.rotation.x = -Math.PI / 2;
+    cityAsphalt.position.set(cx, 0.005, cz);
+    cityAsphalt.receiveShadow = enableShadows;
+    group.add(cityAsphalt);
+  }
 
   const stripeMat = trackMat(
     new THREE.MeshStandardMaterial({
@@ -361,46 +757,60 @@ export function buildCityScene(
   const dashMatrices: THREE.Matrix4[] = [];
   const dummy = new THREE.Object3D();
 
-  for (const rc of layout.roadCenters) {
-    for (let pos = -88; pos <= 88; pos += 6.0) {
-      if (layout.roadCenters.some((ic) => Math.abs(pos - ic) < 6.2)) continue;
-      dummy.position.set(rc, 0.025, pos);
-      dummy.rotation.set(-Math.PI / 2, 0, 0);
-      dummy.scale.set(1, 1, 1);
-      dummy.updateMatrix();
-      dashMatrices.push(dummy.matrix.clone());
+  const cwGeo = trackGeo(new THREE.PlaneGeometry(0.65, 2.8));
+  const cwMatrices: THREE.Matrix4[] = [];
 
-      dummy.position.set(pos, 0.025, rc);
-      dummy.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
-      dummy.updateMatrix();
-      dashMatrices.push(dummy.matrix.clone());
+  for (const city of layout.cities) {
+    const minX = city.roadCentersX[0] - 4;
+    const maxX = city.roadCentersX[city.roadCentersX.length - 1] + 4;
+    const minZ = city.roadCentersZ[0] - 4;
+    const maxZ = city.roadCentersZ[city.roadCentersZ.length - 1] + 4;
+
+    for (const rcx of city.roadCentersX) {
+      for (let pos = minZ; pos <= maxZ; pos += 6.0) {
+        if (city.roadCentersZ.some((ic) => Math.abs(pos - ic) < 6.2)) continue;
+        dummy.position.set(rcx, 0.025, pos);
+        dummy.rotation.set(-Math.PI / 2, 0, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        dashMatrices.push(dummy.matrix.clone());
+      }
+    }
+    for (const rcz of city.roadCentersZ) {
+      for (let pos = minX; pos <= maxX; pos += 6.0) {
+        if (city.roadCentersX.some((ic) => Math.abs(pos - ic) < 6.2)) continue;
+        dummy.position.set(pos, 0.025, rcz);
+        dummy.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        dashMatrices.push(dummy.matrix.clone());
+      }
+    }
+    for (const rx of city.roadCentersX) {
+      for (const rz of city.roadCentersZ) {
+        for (let s = -3.4; s <= 3.4; s += 1.36) {
+          for (const side of [-1, 1]) {
+            dummy.position.set(rx + s, 0.028, rz + side * 6.5);
+            dummy.rotation.set(-Math.PI / 2, 0, 0);
+            dummy.updateMatrix();
+            cwMatrices.push(dummy.matrix.clone());
+
+            dummy.position.set(rx + side * 6.5, 0.028, rz + s);
+            dummy.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
+            dummy.updateMatrix();
+            cwMatrices.push(dummy.matrix.clone());
+          }
+        }
+      }
     }
   }
+
   const dashInst = new THREE.InstancedMesh(dashGeo, yellowLineMat, dashMatrices.length);
   dashMatrices.forEach((m, i) => dashInst.setMatrixAt(i, m));
   dashInst.instanceMatrix.needsUpdate = true;
   dashInst.computeBoundingSphere();
   group.add(dashInst);
 
-  const cwGeo = trackGeo(new THREE.PlaneGeometry(0.65, 2.8));
-  const cwMatrices: THREE.Matrix4[] = [];
-  for (const rx of layout.roadCenters) {
-    for (const rz of layout.roadCenters) {
-      for (let s = -3.4; s <= 3.4; s += 1.36) {
-        for (const side of [-1, 1]) {
-          dummy.position.set(rx + s, 0.028, rz + side * 6.5);
-          dummy.rotation.set(-Math.PI / 2, 0, 0);
-          dummy.updateMatrix();
-          cwMatrices.push(dummy.matrix.clone());
-
-          dummy.position.set(rx + side * 6.5, 0.028, rz + s);
-          dummy.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
-          dummy.updateMatrix();
-          cwMatrices.push(dummy.matrix.clone());
-        }
-      }
-    }
-  }
   const cwInst = new THREE.InstancedMesh(cwGeo, stripeMat, cwMatrices.length);
   cwMatrices.forEach((m, i) => cwInst.setMatrixAt(i, m));
   cwInst.instanceMatrix.needsUpdate = true;
@@ -490,6 +900,14 @@ export function buildCityScene(
       yardPad.position.set(b.cx, layout.sidewalkHeight + 0.012, b.cz);
       yardPad.receiveShadow = enableShadows;
       group.add(yardPad);
+    } else if (b.type === 'golden_promenade') {
+      const promPad = new THREE.Mesh(
+        trackGeo(new THREE.BoxGeometry(27.0, 0.03, 27.0)),
+        trackMat(new THREE.MeshStandardMaterial({ color: 0xd9c7a6, roughness: 0.82 })),
+      );
+      promPad.position.set(b.cx, layout.sidewalkHeight + 0.015, b.cz);
+      promPad.receiveShadow = enableShadows;
+      group.add(promPad);
     }
   }
 
@@ -530,22 +948,28 @@ export function buildCityScene(
     group.add(crane);
   }
 
-  // Coastal Promenade Deck (x = 89..95.5, z = -8..96)
-  const promDeck = new THREE.Mesh(
-    trackGeo(new THREE.BoxGeometry(6.8, 0.85, 104)),
+  // Coastal Promenade Deck (split around East Grand Bridge z = -7..7)
+  const promDeckSouth = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(6.8, 0.85, 88.5)),
     sidewalkMat,
   );
-  promDeck.position.set(92.2, layout.sidewalkHeight - 0.425, 44);
-  promDeck.receiveShadow = enableShadows;
-  group.add(promDeck);
+  promDeckSouth.position.set(92.2, layout.sidewalkHeight - 0.425, 51.75);
+  promDeckSouth.receiveShadow = enableShadows;
+  const promDeckNorth = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(6.8, 0.85, 6.5)),
+    sidewalkMat,
+  );
+  promDeckNorth.position.set(92.2, layout.sidewalkHeight - 0.425, -10.75);
+  promDeckNorth.receiveShadow = enableShadows;
+  group.add(promDeckSouth, promDeckNorth);
 
-  // Golden Sandy Beach sloping into the ocean (x = 95..114, z = -6..94)
-  const sandGeo = trackGeo(new THREE.BoxGeometry(20, 0.6, 100));
+  // Golden Sandy Beach sloping into the ocean (x = 95..114, z = 7.5..94)
+  const sandGeo = trackGeo(new THREE.BoxGeometry(20, 0.6, 86.5));
   const sandMat = trackMat(
     new THREE.MeshStandardMaterial({ color: 0xe8d09e, roughness: 0.94, metalness: 0.0 }),
   );
   const beachMesh = new THREE.Mesh(sandGeo, sandMat);
-  beachMesh.position.set(104.5, -0.35, 44);
+  beachMesh.position.set(104.5, -0.35, 50.75);
   beachMesh.rotation.z = -0.032; // slopes gently from 0.06 at x=95 down into bay water
   beachMesh.receiveShadow = enableShadows;
   group.add(beachMesh);
@@ -571,7 +995,7 @@ export function buildCityScene(
     group.add(pole, canopy);
   }
 
-  // Wooden Coastal Tourist Pier (x = 95..118.5, z = 39..45) + Observation Gazebo
+  // Wooden Coastal Tourist Pier (x = 95..118.5, z = 39..45) + Water Ramp + Emerald Marina Dock + Coral Reef World
   const woodMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x8a6142, roughness: 0.84 }));
   const pierDeck = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(24, 0.28, 6.2)), woodMat);
   pierDeck.position.set(106.8, layout.sidewalkHeight - 0.1, 42);
@@ -579,12 +1003,34 @@ export function buildCityScene(
   pierDeck.castShadow = enableShadows;
   group.add(pierDeck);
 
-  // Pier support pilings
-  const pilingGeo = trackGeo(new THREE.CylinderGeometry(0.22, 0.25, 2.4, 8));
+  // Sloped underwater continental sand shelves off Liberty Beach & Emerald Bay Marina
+  const shelfGeo1 = trackGeo(new THREE.BoxGeometry(31, 0.8, 102));
+  const shelf1 = new THREE.Mesh(shelfGeo1, seabedSandMat);
+  shelf1.position.set(121.5, -7.2, 44);
+  shelf1.rotation.z = -0.43;
+  shelf1.receiveShadow = enableShadows;
+  const shelfGeo2 = trackGeo(new THREE.BoxGeometry(29, 0.8, 30));
+  const shelf2 = new THREE.Mesh(shelfGeo2, seabedSandMat);
+  shelf2.position.set(219.5, -7.2, 33);
+  shelf2.rotation.z = 0.44;
+  shelf2.receiveShadow = enableShadows;
+  group.add(shelf1, shelf2);
+
+  // Boat launch ramp off end of Liberty Pier & Emerald Bay Marina floating dock
+  const pierRamp = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(4.2, 0.18, 4.0)), woodMat);
+  pierRamp.position.set(119.8, -0.22, 42);
+  pierRamp.rotation.z = -0.18;
+  const emeraldDock = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(7.2, 0.24, 5.2)), woodMat);
+  emeraldDock.position.set(229.8, -0.05, 32);
+  emeraldDock.receiveShadow = enableShadows;
+  group.add(pierRamp, emeraldDock);
+
+  // Pier support pilings (extending down to seabed)
+  const pilingGeo = trackGeo(new THREE.CylinderGeometry(0.22, 0.26, 14.2, 8));
   for (let px = 97; px <= 117; px += 4.8) {
     for (const pz of [39.3, 44.7]) {
       const pile = new THREE.Mesh(pilingGeo, woodMat);
-      pile.position.set(px, -0.7, pz);
+      pile.position.set(px, -7.0, pz);
       group.add(pile);
     }
   }
@@ -605,6 +1051,197 @@ export function buildCityScene(
   gazRoof.position.set(115.5, layout.sidewalkHeight + 3.25, 42);
   gazRoof.castShadow = enableShadows;
   group.add(gazRoof);
+
+  // 4B. 3D Underwater Coral Reefs, Kelp Forest, Rock Arches, Sunken Shipwreck & Marine Wildlife
+  const coralMats = [
+    trackMat(new THREE.MeshStandardMaterial({ color: 0xf43f5e, roughness: 0.72, emissive: 0x4c0519, emissiveIntensity: 0.16 })),
+    trackMat(new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.74, emissive: 0x431407, emissiveIntensity: 0.14 })),
+    trackMat(new THREE.MeshStandardMaterial({ color: 0xa855f7, roughness: 0.7, emissive: 0x3b0764, emissiveIntensity: 0.18 })),
+    trackMat(new THREE.MeshStandardMaterial({ color: 0x14b8a6, roughness: 0.68, emissive: 0x042f2e, emissiveIntensity: 0.16 })),
+    trackMat(new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.7, emissive: 0x422006, emissiveIntensity: 0.14 })),
+  ];
+  const reefRockMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.94 }));
+  const kelpMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.78, side: THREE.DoubleSide }));
+  const bubbleMat = trackMat(
+    new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.65 }),
+  );
+
+  const reefRockGeo = trackGeo(new THREE.DodecahedronGeometry(1.8, 0));
+  const brainCoralGeo = trackGeo(new THREE.SphereGeometry(0.95, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6));
+  const stagBranchGeo = trackGeo(new THREE.CylinderGeometry(0.1, 0.24, 1.9, 6));
+  const kelpGeo = trackGeo(new THREE.BoxGeometry(0.32, 4.8, 0.08));
+  kelpGeo.translate(0, 2.4, 0);
+  const bubbleGeo = trackGeo(new THREE.SphereGeometry(0.14, 6, 6));
+
+  const reefSpots: Array<[number, number, number]> = [
+    [138, 22, 1.2], [146, 36, 1.5], [142, 54, 1.1], [154, 68, 1.4],
+    [160, 32, 1.6], [172, 44, 1.3], [178, 66, 1.5], [186, 38, 1.4],
+    [194, 52, 1.2], [202, 26, 1.5], [152, -24, 1.3], [176, -34, 1.4],
+    [195, -48, 1.6], [144, -68, 1.2], [190, 74, 1.3], [134, 78, 1.1],
+    [-35, -155, 1.4], [38, -148, 1.5], [-42, 145, 1.4], [46, 162, 1.5],
+  ];
+  reefSpots.forEach(([rx, rz, sc], idx) => {
+    const cg = new THREE.Group();
+    cg.position.set(rx, OCEAN_SEABED_Y - 0.15, rz);
+
+    const boulder = new THREE.Mesh(reefRockGeo, reefRockMat);
+    boulder.scale.set(sc * 1.3, sc * 0.7, sc * 1.1);
+    boulder.rotation.y = idx * 0.85;
+    cg.add(boulder);
+
+    const cMat = coralMats[idx % coralMats.length];
+    const brain = new THREE.Mesh(brainCoralGeo, cMat);
+    brain.position.set(sc * 0.75, 0.2, sc * 0.4);
+    brain.scale.setScalar(sc * 0.75);
+    cg.add(brain);
+
+    for (let b = 0; b < 3; b++) {
+      const stag = new THREE.Mesh(stagBranchGeo, coralMats[(idx + b + 1) % coralMats.length]);
+      stag.position.set((b - 1) * 0.55 * sc, 0.9, -0.45 * sc);
+      stag.rotation.z = (b - 1) * 0.34;
+      stag.rotation.x = (b % 2 === 0 ? 1 : -1) * 0.22;
+      cg.add(stag);
+    }
+
+    // Swaying Kelp stalks around reef
+    for (let k = 0; k < 2; k++) {
+      const kelp = new THREE.Mesh(kelpGeo, kelpMat);
+      kelp.position.set((k === 0 ? -1.4 : 1.5) * sc, 0, (k === 0 ? 0.9 : -1.1) * sc);
+      kelp.scale.y = 0.8 + (idx % 3) * 0.38;
+      cg.add(kelp);
+      underwaterKelp.push({ mesh: kelp, phase: idx * 0.7 + k * 1.9, speed: 1.4 + (k % 2) * 0.35 });
+    }
+
+    // Rising Bubble plume on every 2nd coral vent
+    if (idx % 2 === 0) {
+      for (let b = 0; b < 3; b++) {
+        const bub = new THREE.Mesh(bubbleGeo, bubbleMat);
+        bub.position.set(rx + (b - 1) * 0.45, OCEAN_SEABED_Y + 1 + b * 3.2, rz + 0.3);
+        group.add(bub);
+        underwaterBubbles.push({
+          mesh: bub,
+          baseY: OCEAN_SEABED_Y + 0.5,
+          phase: idx * 0.9 + b * 2.1,
+          speed: 1.4 + (b % 2) * 0.4,
+        });
+      }
+    }
+
+    group.add(cg);
+  });
+
+  // Underwater Reef Stone Arches (swim-through / sub-through landmarks)
+  for (const [ax, az, rot] of [[158, 42, 0.35], [182, 22, -0.45]] as const) {
+    const arch = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(4.8, 1.15, 8, 16, Math.PI)),
+      reefRockMat,
+    );
+    arch.position.set(ax, OCEAN_SEABED_Y - 0.3, az);
+    arch.rotation.y = rot;
+    group.add(arch);
+  }
+
+  // Sunken Wooden Galleon Shipwreck & Glowing Treasure Chest at (165, -13.5, 58)
+  const wreckGroup = new THREE.Group();
+  wreckGroup.position.set(165, OCEAN_SEABED_Y + 0.3, 58);
+  wreckGroup.rotation.set(0.08, -0.52, -0.18);
+  const wreckWoodMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x4a3525, roughness: 0.92 }));
+  const wreckHull = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(4.6, 2.8, 14.5)), wreckWoodMat);
+  wreckHull.position.y = 1.2;
+  const wreckBow = new THREE.Mesh(trackGeo(new THREE.ConeGeometry(2.4, 4.2, 6)), wreckWoodMat);
+  wreckBow.rotation.x = -Math.PI * 0.5;
+  wreckBow.position.set(0, 1.4, -9.2);
+  const wreckMast = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.18, 0.28, 8.8, 8)), wreckWoodMat);
+  wreckMast.position.set(0, 5.2, -1.2);
+  wreckMast.rotation.z = 0.28;
+  const wreckYard = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.1, 0.1, 5.2, 6)), wreckWoodMat);
+  wreckYard.rotation.z = Math.PI * 0.5;
+  wreckYard.position.set(0.6, 6.8, -1.2);
+  const chestBox = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(1.4, 0.95, 0.95)),
+    trackMat(new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.45, metalness: 0.35 })),
+  );
+  chestBox.position.set(1.6, 2.75, 2.5);
+  const chestGold = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(1.15, 0.25, 0.72)),
+    trackMat(new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xf59e0b, emissiveIntensity: 1.4, roughness: 0.22, metalness: 0.85 })),
+  );
+  chestGold.position.set(1.6, 3.26, 2.5);
+  wreckGroup.add(wreckHull, wreckBow, wreckMast, wreckYard, chestBox, chestGold);
+  group.add(wreckGroup);
+
+  // Animated Underwater Tropical Fish Schools & Graceful Manta Rays
+  const fishBodyGeo = trackGeo(new THREE.SphereGeometry(0.24, 8, 6));
+  fishBodyGeo.scale(0.65, 0.85, 1.6);
+  const fishTailGeo = trackGeo(new THREE.ConeGeometry(0.18, 0.32, 4));
+  fishTailGeo.rotateX(Math.PI * 0.5);
+  const fishColors = [0xf59e0b, 0x38bdf8, 0xf43f5e, 0xfacc15, 0x2dd4bf];
+  const fishMats = fishColors.map((c) =>
+    trackMat(new THREE.MeshStandardMaterial({ color: c, roughness: 0.35, metalness: 0.15 })),
+  );
+
+  for (const [sx, sy, sz, rad, speed, count] of [
+    [146, -5.2, 36, 9.5, 0.42, 8],
+    [166, -7.8, 56, 11.5, -0.34, 10],
+    [192, -6.0, 32, 10.0, 0.38, 8],
+    [168, -5.6, -34, 12.0, 0.32, 7],
+  ] as const) {
+    const pivot = new THREE.Group();
+    pivot.position.set(sx, sy, sz);
+    const fins: THREE.Mesh[] = [];
+    for (let f = 0; f < count; f++) {
+      const ang = (f / count) * Math.PI * 2;
+      const fg = new THREE.Group();
+      const rOff = rad + ((f % 3) - 1) * 1.4;
+      fg.position.set(Math.cos(ang) * rOff, ((f % 3) - 1) * 0.85, Math.sin(ang) * rOff);
+      fg.rotation.y = speed > 0 ? -ang : -ang + Math.PI;
+      const fm = fishMats[f % fishMats.length];
+      const fBody = new THREE.Mesh(fishBodyGeo, fm);
+      const fTail = new THREE.Mesh(fishTailGeo, fm);
+      fTail.position.set(0, 0, 0.36);
+      fg.add(fBody, fTail);
+      pivot.add(fg);
+      fins.push(fTail);
+    }
+    group.add(pivot);
+    underwaterFishSchools.push({ pivot, speed, phase: sx * 0.1, fishFins: fins });
+  }
+
+  const mantaMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x1e3a5f, roughness: 0.42, metalness: 0.18 }));
+  const mantaBodyGeo = trackGeo(new THREE.SphereGeometry(0.75, 10, 8));
+  mantaBodyGeo.scale(1.1, 0.24, 1.6);
+  const mantaWingGeo = trackGeo(new THREE.ConeGeometry(1.45, 2.2, 3));
+  mantaWingGeo.rotateZ(Math.PI * 0.5);
+  mantaWingGeo.scale(1.0, 0.12, 0.85);
+  for (const [mx, mz, rx, rz, my, sp] of [
+    [164, 40, 22, 18, -4.6, 0.22],
+    [186, -24, 24, 18, -6.4, -0.19],
+  ] as const) {
+    const mg = new THREE.Group();
+    const mBody = new THREE.Mesh(mantaBodyGeo, mantaMat);
+    const wingL = new THREE.Mesh(mantaWingGeo, mantaMat);
+    wingL.position.set(-1.1, 0, 0.1);
+    const wingR = new THREE.Mesh(mantaWingGeo, mantaMat);
+    wingR.rotation.y = Math.PI;
+    wingR.position.set(1.1, 0, 0.1);
+    const mTail = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.03, 0.08, 2.1, 6)), mantaMat);
+    mTail.rotation.x = Math.PI * 0.5;
+    mTail.position.set(0, 0, 1.8);
+    mg.add(mBody, wingL, wingR, mTail);
+    group.add(mg);
+    underwaterMantas.push({
+      group: mg,
+      centerX: mx,
+      centerZ: mz,
+      radiusX: rx,
+      radiusZ: rz,
+      baseY: my,
+      speed: sp,
+      phase: mx * 0.05,
+      wingL,
+      wingR,
+    });
+  }
 
   // 5. Shared Emissive Window & Lamp Materials (updated dynamically by TimeOfDay)
   const windowGlowMat = trackMat(
@@ -678,8 +1315,153 @@ export function buildCityScene(
       return;
     }
 
+    if (b.style === 'airport_terminal') {
+      // Sculpted Gull-Wing Curved Airport Terminal + Slanted Glass Concourse + V-Columns + Passenger Jetway + Airport Code Gantry
+      const wallMat = trackMat(
+        new THREE.MeshStandardMaterial({ color: b.primaryColor, roughness: 0.42, metalness: 0.2 }),
+      );
+      const wingMat = trackMat(
+        new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.34, metalness: 0.48 }),
+      );
+      const accentMat = trackMat(
+        new THREE.MeshStandardMaterial({
+          color: b.accentColor,
+          emissive: b.accentColor,
+          emissiveIntensity: 0.18,
+          roughness: 0.32,
+          metalness: 0.55,
+        }),
+      );
+      const concourseGlassMat = trackMat(
+        new THREE.MeshStandardMaterial({
+          color: 0xbae6fd,
+          map: textures.buildingWindowMap,
+          emissive: 0x38bdf8,
+          emissiveMap: textures.buildingWindowMap,
+          emissiveIntensity: 0.18,
+          roughness: 0.12,
+          metalness: 0.62,
+        }),
+      );
+      buildingWindowMats.push(concourseGlassMat);
+
+      const core = new THREE.Mesh(
+        trackGeo(new THREE.BoxGeometry(b.width * 0.88, b.height * 0.72, b.depth * 0.82)),
+        wallMat,
+      );
+      core.position.y = b.height * 0.36;
+      core.castShadow = enableShadows;
+      core.receiveShadow = enableShadows;
+      bGroup.add(core);
+
+      const glassConcourse = new THREE.Mesh(
+        trackGeo(new THREE.BoxGeometry(b.width * 0.96, b.height * 0.58, b.depth * 0.96)),
+        concourseGlassMat,
+      );
+      glassConcourse.position.y = b.height * 0.34;
+      bGroup.add(glassConcourse);
+
+      // Sweeping Gull-Wing Airfoil Canopy Roof extruded along Z
+      const hw = b.width * 0.5 + 2.4;
+      const roofShape = new THREE.Shape();
+      roofShape.moveTo(-hw, 1.35);
+      roofShape.quadraticCurveTo(-hw * 0.45, -0.35, 0, 0.85);
+      roofShape.quadraticCurveTo(hw * 0.45, -0.35, hw, 1.35);
+      roofShape.lineTo(hw, 1.95);
+      roofShape.quadraticCurveTo(hw * 0.45, 0.25, 0, 1.55);
+      roofShape.quadraticCurveTo(-hw * 0.45, 0.25, -hw, 1.95);
+      roofShape.closePath();
+
+      const gullGeo = trackGeo(
+        new THREE.ExtrudeGeometry(roofShape, {
+          depth: b.depth + 3.8,
+          bevelEnabled: true,
+          bevelThickness: 0.14,
+          bevelSize: 0.14,
+          bevelSegments: 2,
+          curveSegments: 16,
+        }),
+      );
+      gullGeo.translate(0, 0, -(b.depth + 3.8) * 0.5);
+      const gullRoof = new THREE.Mesh(gullGeo, wingMat);
+      gullRoof.position.y = b.height * 0.68;
+      gullRoof.castShadow = enableShadows;
+      bGroup.add(gullRoof);
+
+      // Sculpted V-Columns along South Entrance Concourse
+      const vColGeo = trackGeo(new THREE.CylinderGeometry(0.14, 0.18, b.height * 0.78, 8));
+      for (const vx of [-b.width * 0.36, -b.width * 0.14, b.width * 0.14, b.width * 0.36]) {
+        const colL = new THREE.Mesh(vColGeo, accentMat);
+        colL.position.set(vx - 0.5, b.height * 0.38, b.depth * 0.5 + 1.2);
+        colL.rotation.z = -0.18;
+        const colR = new THREE.Mesh(vColGeo, accentMat);
+        colR.position.set(vx + 0.5, b.height * 0.38, b.depth * 0.5 + 1.2);
+        colR.rotation.z = 0.18;
+        bGroup.add(colL, colR);
+      }
+
+      // Telescopic Glass Passenger Jetway Bridge extending toward apron gate
+      const jetwayTube = new THREE.Mesh(
+        trackGeo(new THREE.BoxGeometry(2.2, 2.1, 8.2)),
+        wingMat,
+      );
+      jetwayTube.position.set(b.width * 0.26, 3.35, b.depth * 0.5 + 4.0);
+      jetwayTube.castShadow = enableShadows;
+      const jetwayCol = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.24, 0.3, 3.2, 8)),
+        darkMetalMat,
+      );
+      jetwayCol.position.set(b.width * 0.26, 1.6, b.depth * 0.5 + 7.2);
+      bGroup.add(jetwayTube, jetwayCol);
+
+      // Airport Terminal Code Gantry Sign
+      const apCode =
+        b.id.includes('emerald')
+          ? 'EMB · EMERALD BAY'
+          : b.id.includes('highland')
+            ? 'HLD · HIGHLAND AERO'
+            : b.id.includes('golden')
+              ? 'GZH · GOLDEN HORIZON'
+              : 'LBY · LIBERTY INTL';
+      const apCanvas = document.createElement('canvas');
+      apCanvas.width = 512;
+      apCanvas.height = 128;
+      const aCtx = apCanvas.getContext('2d');
+      if (aCtx) {
+        aCtx.fillStyle = '#0f172a';
+        aCtx.fillRect(0, 0, 512, 128);
+        aCtx.strokeStyle = '#38bdf8';
+        aCtx.lineWidth = 6;
+        aCtx.strokeRect(6, 6, 500, 116);
+        aCtx.fillStyle = '#f8fafc';
+        aCtx.font = 'bold 38px Inter, system-ui, sans-serif';
+        aCtx.textAlign = 'center';
+        aCtx.textBaseline = 'middle';
+        aCtx.fillText(apCode, 256, 48);
+        aCtx.fillStyle = '#38bdf8';
+        aCtx.font = 'bold 20px Inter, system-ui, sans-serif';
+        aCtx.fillText('SKYLINE AIR DEPARTURES', 256, 92);
+      }
+      const apTex = trackTex(new THREE.CanvasTexture(apCanvas));
+      const apSignMat = trackMat(
+        new THREE.MeshStandardMaterial({
+          map: apTex,
+          emissive: 0xe0f2fe,
+          emissiveMap: apTex,
+          emissiveIntensity: 0.72,
+          roughness: 0.3,
+        }),
+      );
+      const apSign = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(10.5, 1.55, 0.28)), apSignMat);
+      apSign.position.set(0, 4.1, b.depth * 0.5 + 1.55);
+      bGroup.add(apSign);
+
+      group.add(bGroup);
+      return;
+    }
+
     if (b.style === 'reward_center') {
-      // Modern flagship CITY REWARD CENTER showroom with gold fascia, glowing vitrine windows, rooftop crown & marquee
+      // Sculpted Flagship CITY REWARD CENTER showroom: V-pillars, angled gold halo, glowing vitrine & rotating diamond emblem
       const baseMat = trackMat(
         new THREE.MeshStandardMaterial({ color: b.primaryColor, roughness: 0.42, metalness: 0.25 }),
       );
@@ -687,16 +1469,16 @@ export function buildCityScene(
         new THREE.MeshStandardMaterial({
           color: b.accentColor,
           emissive: 0xd97706,
-          emissiveIntensity: 0.25,
-          roughness: 0.28,
-          metalness: 0.55,
+          emissiveIntensity: 0.28,
+          roughness: 0.24,
+          metalness: 0.62,
         }),
       );
       const cyanGlowMat = trackMat(
         new THREE.MeshStandardMaterial({
           color: 0xe0f2fe,
           emissive: 0x38bdf8,
-          emissiveIntensity: 0.35,
+          emissiveIntensity: 0.38,
           roughness: 0.14,
           metalness: 0.45,
         }),
@@ -713,28 +1495,40 @@ export function buildCityScene(
       bGroup.add(lowerBody);
 
       const goldBelt = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(b.width + 0.38, 0.46, b.depth + 0.38)),
+        trackGeo(new THREE.BoxGeometry(b.width + 0.55, 0.52, b.depth + 0.55)),
         goldMat,
       );
       goldBelt.position.y = b.height * 0.62;
       bGroup.add(goldBelt);
 
       const upperShowroom = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(b.width * 0.84, b.height * 0.38, b.depth * 0.84)),
+        trackGeo(new THREE.CylinderGeometry(b.width * 0.44, b.width * 0.48, b.height * 0.38, 12)),
         cyanGlowMat,
       );
       upperShowroom.position.y = b.height * 0.81;
       upperShowroom.castShadow = enableShadows;
       bGroup.add(upperShowroom);
 
-      const roofTrim = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(b.width * 0.88, 0.36, b.depth * 0.88)),
+      const haloCrown = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(b.width * 0.48, 0.24, 10, 28)),
         goldMat,
       );
-      roofTrim.position.y = b.height + 0.18;
-      bGroup.add(roofTrim);
+      haloCrown.rotation.x = Math.PI * 0.5;
+      haloCrown.rotation.y = 0.12;
+      haloCrown.position.y = b.height + 0.35;
+      bGroup.add(haloCrown);
 
-      // West-facing showcase windows beside entrance + canopy
+      // Rotating Floating Golden Diamond Emblem above Reward Center
+      const crystal = new THREE.Mesh(
+        trackGeo(new THREE.OctahedronGeometry(1.15, 0)),
+        goldMat,
+      );
+      crystal.position.set(0, b.height + 2.15, 0);
+      crystal.scale.set(1, 1.35, 1);
+      bGroup.add(crystal);
+      landmarkSpinners.push({ obj: crystal, speed: 1.35, bobBaseY: b.height + 2.15, bobAmp: 0.24 });
+
+      // West-facing showcase windows + V-columns + canopy
       const vitrineW = new THREE.Mesh(
         trackGeo(new THREE.BoxGeometry(0.14, 2.25, 2.2)),
         windowGlowMat,
@@ -744,15 +1538,22 @@ export function buildCityScene(
       vitrineW2.position.z = 2.55;
       bGroup.add(vitrineW, vitrineW2);
 
+      const vColGeo = trackGeo(new THREE.CylinderGeometry(0.08, 0.11, 3.1, 8));
+      for (const vz of [-3.4, 3.4]) {
+        const p1 = new THREE.Mesh(vColGeo, goldMat);
+        p1.position.set(-b.width * 0.5 - 1.35, 1.55, vz);
+        p1.rotation.x = vz < 0 ? 0.18 : -0.18;
+        bGroup.add(p1);
+      }
+
       const awning = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(1.75, 0.24, b.depth * 0.72)),
+        trackGeo(new THREE.BoxGeometry(1.9, 0.24, b.depth * 0.76)),
         goldMat,
       );
-      awning.position.set(-b.width * 0.5 - 0.82, 3.15, 0);
+      awning.position.set(-b.width * 0.5 - 0.9, 3.18, 0);
       awning.rotation.z = -0.18;
       bGroup.add(awning);
 
-      // Crisp CanvasTexture Shop Marquee facing West entrance street
       const rcCanvas = document.createElement('canvas');
       rcCanvas.width = 512;
       rcCanvas.height = 128;
@@ -772,7 +1573,7 @@ export function buildCityScene(
         rCtx.font = 'bold 22px Inter, system-ui, sans-serif';
         rCtx.fillText('KP SHOP & CHARACTER STUDIO', 256, 90);
       }
-      const rcTex = new THREE.CanvasTexture(rcCanvas);
+      const rcTex = trackTex(new THREE.CanvasTexture(rcCanvas));
       const rcSignMat = trackMat(
         new THREE.MeshStandardMaterial({
           map: rcTex,
@@ -811,14 +1612,13 @@ export function buildCityScene(
       bGroup.add(body);
 
       const trimBand = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(b.width + 0.2, 0.5, b.depth + 0.2)),
+        trackGeo(new THREE.BoxGeometry(b.width + 0.25, 0.5, b.depth + 0.25)),
         trimMat,
       );
       trimBand.position.y = b.height - 0.6;
       bGroup.add(trimBand);
 
       if (b.style === 'factory') {
-        // Sawtooth roof ridges + twin smokestacks
         for (let r = -1; r <= 1; r++) {
           const ridge = new THREE.Mesh(
             trackGeo(new THREE.CylinderGeometry(1.4, 1.4, b.depth * 0.9, 3)),
@@ -841,14 +1641,17 @@ export function buildCityScene(
     }
 
     if (b.style === 'mall') {
-      // Shopping Mall: wide lower concourse + glazed skylight atrium + portico + sign fascia
+      // Sculpted Shopping Mall: fluted corner pilasters, curved barrel-vault skylight atrium, arched entrance portico & roof sign
       const wallMat = trackMat(
         new THREE.MeshStandardMaterial({
           color: b.primaryColor,
           map: textures.commercialFacadeMap,
-          roughness: 0.55,
-          metalness: 0.12,
+          roughness: 0.5,
+          metalness: 0.14,
         }),
+      );
+      const accentMat = trackMat(
+        new THREE.MeshStandardMaterial({ color: b.accentColor, roughness: 0.4, metalness: 0.35 }),
       );
       const base = new THREE.Mesh(
         trackGeo(new THREE.BoxGeometry(b.width, b.height * 0.66, b.depth)),
@@ -859,32 +1662,67 @@ export function buildCityScene(
       base.receiveShadow = enableShadows;
       bGroup.add(base);
 
+      // Vertical architectural pilasters on corners & bays
+      const pilGeo = trackGeo(new THREE.BoxGeometry(0.55, b.height * 0.72, 0.55));
+      for (const px of [-b.width * 0.48, -b.width * 0.22, b.width * 0.22, b.width * 0.48]) {
+        for (const pz of [-b.depth * 0.49, b.depth * 0.49]) {
+          const pil = new THREE.Mesh(pilGeo, accentMat);
+          pil.position.set(px, b.height * 0.36, pz);
+          bGroup.add(pil);
+        }
+      }
+
       const atriumMat = trackMat(
         new THREE.MeshStandardMaterial({
           color: 0xc2dced,
           map: textures.buildingWindowMap,
           emissive: 0xffd791,
           emissiveMap: textures.buildingWindowMap,
-          emissiveIntensity: 0.12,
-          roughness: 0.18,
-          metalness: 0.42,
+          emissiveIntensity: 0.14,
+          roughness: 0.16,
+          metalness: 0.48,
         }),
       );
       buildingWindowMats.push(atriumMat);
 
-      const glassAtrium = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(b.width * 0.94, b.height * 0.34, b.depth * 0.94)),
+      // Curved Barrel-Vaulted Glass Skylight Roof
+      const vaultRadius = b.depth * 0.44;
+      const barrelVault = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(vaultRadius, vaultRadius, b.width * 0.9, 16, 1, false, 0, Math.PI)),
         atriumMat,
       );
-      glassAtrium.position.y = b.height * 0.66 + b.height * 0.17;
-      bGroup.add(glassAtrium);
+      barrelVault.rotation.z = Math.PI * 0.5;
+      barrelVault.scale.set(0.68, 1, 1);
+      barrelVault.position.y = b.height * 0.66;
+      barrelVault.castShadow = enableShadows;
+      bGroup.add(barrelVault);
 
-      const canopy = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(b.width * 0.55, 0.4, 2.6)),
-        trackMat(new THREE.MeshStandardMaterial({ color: b.accentColor, roughness: 0.45, metalness: 0.25 })),
+      const archRibGeo = trackGeo(new THREE.TorusGeometry(vaultRadius + 0.14, 0.16, 6, 18, Math.PI));
+      for (const rx of [-b.width * 0.38, 0, b.width * 0.38]) {
+        const rib = new THREE.Mesh(archRibGeo, accentMat);
+        rib.rotation.y = Math.PI * 0.5;
+        rib.scale.set(1, 0.68, 1);
+        rib.position.set(rx, b.height * 0.66, 0);
+        bGroup.add(rib);
+      }
+
+      // Curved entrance portico canopy + twin pillars
+      const porticoArch = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(2.6, 2.6, 3.0, 12, 1, false, 0, Math.PI)),
+        accentMat,
       );
-      canopy.position.set(0, 3.6, b.depth * 0.5 + 1.2);
-      bGroup.add(canopy);
+      porticoArch.rotation.x = Math.PI * 0.5;
+      porticoArch.scale.set(1.35, 1, 0.45);
+      porticoArch.position.set(0, 3.3, b.depth * 0.5 + 1.3);
+      bGroup.add(porticoArch);
+
+      const portColGeo = trackGeo(new THREE.CylinderGeometry(0.16, 0.2, 3.3, 8));
+      for (const cx of [-3.0, 3.0]) {
+        const pCol = new THREE.Mesh(portColGeo, accentMat);
+        pCol.position.set(cx, 1.65, b.depth * 0.5 + 2.45);
+        bGroup.add(pCol);
+      }
+
       group.add(bGroup);
       return;
     }
@@ -983,6 +1821,56 @@ export function buildCityScene(
 
     const roofY = lobbyH + 0.4 + mainH;
     const isRooftopBuilding = layout.rooftops.some((r) => r.buildingId === b.id);
+    const accentTrimMat = trackMat(
+      new THREE.MeshStandardMaterial({ color: b.accentColor, roughness: 0.36, metalness: 0.55 }),
+    );
+    const glowFinMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: b.accentColor,
+        emissive: b.accentColor,
+        emissiveIntensity: 0.48,
+        roughness: 0.25,
+        metalness: 0.45,
+      }),
+    );
+
+    // Non-flat architectural corner pilasters & sun-louver belt courses on offices, restaurants & skyscrapers
+    if (b.style === 'skyscraper' || b.style === 'office') {
+      const pilGeo = trackGeo(
+        new THREE.CylinderGeometry(
+          b.style === 'skyscraper' ? 0.42 : 0.32,
+          b.style === 'skyscraper' ? 0.72 : 0.42,
+          mainH + 0.6,
+          8,
+        ),
+      );
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          const pil = new THREE.Mesh(pilGeo, accentTrimMat);
+          pil.position.set(sx * (b.width * 0.49), lobbyH + 0.4 + mainH * 0.5, sz * (b.depth * 0.49));
+          bGroup.add(pil);
+        }
+      }
+      if (mainH > 12) {
+        for (let by = lobbyH + 10; by < roofY - 3; by += 11) {
+          const belt = new THREE.Mesh(
+            trackGeo(new THREE.BoxGeometry(b.width + 0.55, 0.35, b.depth + 0.55)),
+            accentTrimMat,
+          );
+          belt.position.y = by;
+          bGroup.add(belt);
+        }
+      }
+    } else if (b.style === 'restaurant') {
+      // Sculpted patio pergola frame + side planters on restaurants/cafes
+      const roofTrim = new THREE.Mesh(
+        trackGeo(new THREE.BoxGeometry(b.width + 0.65, 0.36, b.depth + 0.65)),
+        accentTrimMat,
+      );
+      roofTrim.position.y = roofY + 0.18;
+      bGroup.add(roofTrim);
+    }
+
     if (!isRooftopBuilding) {
       const parapet = new THREE.Mesh(
         trackGeo(new THREE.BoxGeometry(b.width + 0.18, 0.5, b.depth + 0.18)),
@@ -1003,10 +1891,10 @@ export function buildCityScene(
       bGroup.add(setback);
 
       const crown = new THREE.Mesh(
-        trackGeo(new THREE.BoxGeometry(b.width * 0.72, 0.45, b.depth * 0.72)),
-        darkMetalMat,
+        trackGeo(new THREE.BoxGeometry(b.width * 0.74, 0.52, b.depth * 0.74)),
+        accentTrimMat,
       );
-      crown.position.y = roofY + 0.5 + setH + 0.22;
+      crown.position.y = roofY + 0.5 + setH + 0.26;
       bGroup.add(crown);
 
       if (b.hasSpire) {
@@ -1038,7 +1926,32 @@ export function buildCityScene(
         bGroup.add(beacon);
       }
     } else if (b.id === 'freedom_tower') {
-      // Corner spire on stairhouse (keeps central helipad unobstructed) + illuminated CITY TOWER crown & lobby signs
+      // Iconic CITY TOWER: Art-Deco vertical glowing ribs, octagonal crown gallery collar, colonnade portico, corner spire & CITY TOWER signs
+      const finGeo = trackGeo(new THREE.BoxGeometry(0.42, mainH * 0.88, 0.55));
+      for (const fx of [-b.width * 0.24, b.width * 0.24]) {
+        const finS = new THREE.Mesh(finGeo, glowFinMat);
+        finS.position.set(fx, lobbyH + 0.4 + mainH * 0.5, b.depth * 0.5 + 0.16);
+        const finN = new THREE.Mesh(finGeo, glowFinMat);
+        finN.position.set(fx, lobbyH + 0.4 + mainH * 0.5, -b.depth * 0.5 - 0.16);
+        bGroup.add(finS, finN);
+      }
+      const crownRing = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(b.width * 0.54, 0.32, 8, 8)),
+        glowFinMat,
+      );
+      crownRing.rotation.x = Math.PI * 0.5;
+      crownRing.rotation.z = Math.PI / 8;
+      crownRing.position.y = roofY - 2.6;
+      bGroup.add(crownRing);
+
+      // Colonnade entrance portico pillars flanking South doorway
+      const portColGeo = trackGeo(new THREE.CylinderGeometry(0.18, 0.24, lobbyH + 0.4, 10));
+      for (const cx of [-2.8, 2.8]) {
+        const col = new THREE.Mesh(portColGeo, accentTrimMat);
+        col.position.set(cx, (lobbyH + 0.4) * 0.5, b.depth * 0.5 + 1.05);
+        bGroup.add(col);
+      }
+
       const spireX = 4.7;
       const spireZ = -5.0;
       const spireBase = new THREE.Mesh(
@@ -1080,7 +1993,7 @@ export function buildCityScene(
         sCtx.textBaseline = 'middle';
         sCtx.fillText('CITY TOWER', 256, 66);
       }
-      const signTex = new THREE.CanvasTexture(signCanvas);
+      const signTex = trackTex(new THREE.CanvasTexture(signCanvas));
       const signMat = trackMat(
         new THREE.MeshStandardMaterial({
           map: signTex,
@@ -1106,6 +2019,150 @@ export function buildCityScene(
       );
       lobbySign.position.set(0, 3.65, b.depth * 0.5 + 0.26);
       bGroup.add(crownSignS, crownSignE, lobbySign);
+    } else if (b.id === 'c2_emerald_tower') {
+      // Sculpted Emerald Sky Tower: Curved Sail Wing Fins + Halo Ring + Corner Beacon Spire
+      const sailShape = new THREE.Shape();
+      sailShape.moveTo(0, 0);
+      sailShape.lineTo(2.4, 0);
+      sailShape.quadraticCurveTo(2.8, mainH * 0.55, 0.2, mainH + 1.5);
+      sailShape.lineTo(0, mainH + 1.5);
+      sailShape.closePath();
+      const sailGeo = trackGeo(
+        new THREE.ExtrudeGeometry(sailShape, { depth: 0.45, bevelEnabled: false, curveSegments: 12 }),
+      );
+      sailGeo.translate(0, 0, -0.225);
+      const angles = [Math.PI * 0.25, Math.PI * 0.75, -Math.PI * 0.75, -Math.PI * 0.25];
+      for (const ang of angles) {
+        const sail = new THREE.Mesh(sailGeo, glowFinMat);
+        sail.position.set(Math.cos(ang) * (b.width * 0.46), lobbyH + 0.4, Math.sin(ang) * (b.depth * 0.46));
+        sail.rotation.y = -ang;
+        bGroup.add(sail);
+      }
+      const ecoHalo = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(b.width * 0.56, 0.28, 8, 24)),
+        glowFinMat,
+      );
+      ecoHalo.rotation.x = Math.PI * 0.5;
+      ecoHalo.position.y = roofY - 2.2;
+      bGroup.add(ecoHalo);
+
+      const spireX = 4.2;
+      const spireZ = -4.8;
+      const spireMast = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.1, 0.28, 9.0, 8)),
+        accentTrimMat,
+      );
+      spireMast.position.set(spireX, roofY + 7.2, spireZ);
+      const beacon = new THREE.Mesh(
+        trackGeo(new THREE.SphereGeometry(0.32, 10, 8)),
+        trackMat(new THREE.MeshStandardMaterial({ color: 0x34d399, emissive: 0x10b981, emissiveIntensity: 1.5 })),
+      );
+      beacon.position.set(spireX, roofY + 11.9, spireZ);
+      bGroup.add(spireMast, beacon);
+    } else if (b.id === 'c3_aero_observatory') {
+      // Sculpted Aero Observatory Tower: Cantilevered Saucer Observation Pod + Glowing Orbital Ring + Rotating Astronomical Dome
+      const saucerPts = [
+        new THREE.Vector2(4.2, 0),
+        new THREE.Vector2(8.8, 1.4),
+        new THREE.Vector2(9.2, 2.3),
+        new THREE.Vector2(6.8, 3.2),
+      ];
+      const saucerPod = new THREE.Mesh(
+        trackGeo(new THREE.LatheGeometry(saucerPts, 20)),
+        accentTrimMat,
+      );
+      saucerPod.position.y = roofY - 5.2;
+      bGroup.add(saucerPod);
+
+      const orbitalRing = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(9.45, 0.25, 8, 28)),
+        glowFinMat,
+      );
+      orbitalRing.rotation.x = Math.PI * 0.5;
+      orbitalRing.position.y = roofY - 3.0;
+      bGroup.add(orbitalRing);
+
+      // Rotating Astronomical Observatory Dome on corner stairhouse
+      const domeGroup = new THREE.Group();
+      domeGroup.position.set(4.2, roofY + 3.0, -5.0);
+      const domeMesh = new THREE.Mesh(
+        trackGeo(new THREE.SphereGeometry(1.45, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.5)),
+        trackMat(new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.28, metalness: 0.5 })),
+      );
+      const scopeBarrel = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.24, 0.3, 1.85, 10)),
+        darkMetalMat,
+      );
+      scopeBarrel.rotation.x = Math.PI * 0.28;
+      scopeBarrel.position.set(0, 0.95, 0.9);
+      domeGroup.add(domeMesh, scopeBarrel);
+      bGroup.add(domeGroup);
+      landmarkSpinners.push({ obj: domeGroup, speed: 0.45 });
+    } else if (b.id === 'c4_golden_spire') {
+      // Iconic Golden Horizon Spire: Twin Curved Golden Arches + Solar Halo Crown + Corner Spire + GOLDEN SPIRE Sign
+      const archCurveL = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-b.width * 0.58, 0, 0),
+        new THREE.Vector3(-b.width * 0.68, mainH * 0.55, 0),
+        new THREE.Vector3(-b.width * 0.36, roofY - 2.0, 0),
+      ]);
+      const archCurveR = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(b.width * 0.58, 0, 0),
+        new THREE.Vector3(b.width * 0.68, mainH * 0.55, 0),
+        new THREE.Vector3(b.width * 0.36, roofY - 2.0, 0),
+      ]);
+      const archL = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(archCurveL, 18, 0.42, 8, false)), glowFinMat);
+      const archR = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(archCurveR, 18, 0.42, 8, false)), glowFinMat);
+      bGroup.add(archL, archR);
+
+      const solarRing = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(b.width * 0.56, 0.3, 8, 24)),
+        glowFinMat,
+      );
+      solarRing.rotation.x = Math.PI * 0.5;
+      solarRing.position.y = roofY - 2.4;
+      bGroup.add(solarRing);
+
+      const spireMast = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.1, 0.28, 9.5, 8)),
+        accentTrimMat,
+      );
+      spireMast.position.set(4.2, roofY + 7.4, -5.0);
+      const beacon = new THREE.Mesh(
+        trackGeo(new THREE.SphereGeometry(0.34, 10, 8)),
+        trackMat(new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xf59e0b, emissiveIntensity: 1.55 })),
+      );
+      beacon.position.set(4.2, roofY + 12.2, -5.0);
+      bGroup.add(spireMast, beacon);
+
+      const gsCanvas = document.createElement('canvas');
+      gsCanvas.width = 512;
+      gsCanvas.height = 128;
+      const gCtx = gsCanvas.getContext('2d');
+      if (gCtx) {
+        gCtx.fillStyle = '#0f172a';
+        gCtx.fillRect(0, 0, 512, 128);
+        gCtx.strokeStyle = '#eab308';
+        gCtx.lineWidth = 6;
+        gCtx.strokeRect(6, 6, 500, 116);
+        gCtx.fillStyle = '#fef08a';
+        gCtx.font = 'bold 54px Inter, system-ui, sans-serif';
+        gCtx.textAlign = 'center';
+        gCtx.textBaseline = 'middle';
+        gCtx.fillText('GOLDEN SPIRE', 256, 66);
+      }
+      const gsTex = trackTex(new THREE.CanvasTexture(gsCanvas));
+      const gsSignMat = trackMat(
+        new THREE.MeshStandardMaterial({
+          map: gsTex,
+          emissive: 0xfef08a,
+          emissiveMap: gsTex,
+          emissiveIntensity: 0.72,
+          roughness: 0.35,
+        }),
+      );
+      const crownSignS = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(b.width * 0.68, 1.75, 0.24)), gsSignMat);
+      crownSignS.position.set(0, roofY - 1.35, b.depth * 0.5 + 0.06);
+      bGroup.add(crownSignS);
     } else if (!isRooftopBuilding) {
       const hvac = new THREE.Mesh(
         trackGeo(new THREE.BoxGeometry(b.width * 0.34, 1.0, b.depth * 0.28)),
@@ -1518,6 +2575,19 @@ export function buildCityScene(
     [-6.2, -48.2, 0],
     [48.2, 6.2, Math.PI],
     [77.8, -6.2, -Math.PI * 0.5],
+    // City 2 (Emerald Bay) traffic lights
+    [277.8, -6.2, 0],
+    [290.2, 6.2, Math.PI],
+    [319.8, -6.2, 0],
+    // City 3 (Aero Highland) traffic lights
+    [-6.2, -268.2, 0],
+    [6.2, -255.8, Math.PI],
+    [-6.2, -310.2, 0],
+    // City 4 (Golden Horizon) traffic lights
+    [-6.2, 255.8, 0],
+    [6.2, 268.2, Math.PI],
+    [-6.2, 297.8, 0],
+    [48.2, 268.2, Math.PI],
   ];
   const sigMastGeo = trackGeo(new THREE.CylinderGeometry(0.09, 0.11, 5.2, 8));
   const sigArmGeo = trackGeo(new THREE.BoxGeometry(3.6, 0.12, 0.12));
@@ -1685,9 +2755,14 @@ export function buildCityScene(
     drawSideRail('e');
 
     if (roof.hasHelipad) {
-      const padRadius = roof.buildingId === 'freedom_tower' ? 3.5 : 3.0;
-      const hx = roof.buildingId === 'freedom_tower' ? -26.2 : 69.8;
-      const hz = roof.buildingId === 'freedom_tower' ? -25.4 : -17.5;
+      const helipadCoords: Record<string, [number, number, number]> = {
+        freedom_tower: [-26.2, -25.4, 3.5],
+        ind_warehouse: [69.8, -17.5, 3.0],
+        c2_emerald_tower: [299.2, -24.5, 3.2],
+        c3_aero_observatory: [-26.5, -286.5, 3.2],
+        c4_golden_spire: [-26.5, 279.5, 3.2],
+      };
+      const [hx, hz, padRadius] = helipadCoords[roof.buildingId] ?? [rcx, rcz, 3.0];
       const helipad = new THREE.Mesh(
         trackGeo(new THREE.CylinderGeometry(padRadius, padRadius + 0.15, 0.08, 28)),
         helipadMat,
@@ -1901,6 +2976,7 @@ export function buildCityScene(
 
   return {
     group,
+    skyDome,
     animatedWaterMeshes,
     bayWater,
     skyUniforms,
@@ -1909,17 +2985,59 @@ export function buildCityScene(
     buildingWindowMats,
     exteriorDoors,
     updateEnvironment: (elapsedTime: number) => {
-      atcRadar.rotation.y = elapsedTime * 1.4;
+      for (let r = 0; r < atcRadars.length; r++) {
+        atcRadars[r].rotation.y = elapsedTime * 1.4 + r * 0.8;
+      }
       for (let i = 0; i < sailboats.length; i++) {
         const s = sailboats[i];
         s.group.position.y = s.baseY + Math.sin(elapsedTime * 1.35 + s.phase) * 0.14;
         s.group.rotation.z = Math.sin(elapsedTime * 1.1 + s.phase) * 0.045;
+      }
+      for (let i = 0; i < landmarkSpinners.length; i++) {
+        const sp = landmarkSpinners[i];
+        sp.obj.rotation.y = elapsedTime * sp.speed + i * 0.9;
+        if (sp.bobBaseY !== undefined && sp.bobAmp !== undefined) {
+          sp.obj.position.y = sp.bobBaseY + Math.sin(elapsedTime * 2.1 + i) * sp.bobAmp;
+        }
+      }
+      for (let i = 0; i < underwaterFishSchools.length; i++) {
+        const school = underwaterFishSchools[i];
+        school.pivot.rotation.y = elapsedTime * school.speed + school.phase;
+        school.pivot.position.y += Math.sin(elapsedTime * 1.2 + i) * 0.002;
+        for (let f = 0; f < school.fishFins.length; f++) {
+          school.fishFins[f].rotation.y = Math.sin(elapsedTime * 9.5 + f * 1.1) * 0.36;
+        }
+      }
+      for (let i = 0; i < underwaterMantas.length; i++) {
+        const m = underwaterMantas[i];
+        const a = elapsedTime * m.speed + m.phase;
+        const nx = m.centerX + Math.cos(a) * m.radiusX;
+        const nz = m.centerZ + Math.sin(a) * m.radiusZ;
+        const vx = -Math.sin(a) * m.radiusX * m.speed;
+        const vz = Math.cos(a) * m.radiusZ * m.speed;
+        m.group.position.set(nx, m.baseY + Math.sin(elapsedTime * 0.9 + i) * 0.9, nz);
+        m.group.rotation.y = Math.atan2(-vx, -vz);
+        const flap = Math.sin(elapsedTime * 2.6 + i * 1.4) * 0.28;
+        m.wingL.rotation.z = flap;
+        m.wingR.rotation.z = -flap;
+      }
+      for (let i = 0; i < underwaterKelp.length; i++) {
+        const k = underwaterKelp[i];
+        k.mesh.rotation.z = Math.sin(elapsedTime * k.speed + k.phase) * 0.16;
+        k.mesh.rotation.x = Math.cos(elapsedTime * k.speed * 0.8 + k.phase) * 0.1;
+      }
+      for (let i = 0; i < underwaterBubbles.length; i++) {
+        const b = underwaterBubbles[i];
+        const cycle = (elapsedTime * b.speed + b.phase) % 12.2;
+        b.mesh.position.y = b.baseY + cycle;
+        b.mesh.position.x += Math.sin(elapsedTime * 3.0 + b.phase) * 0.004;
       }
     },
     dispose: () => {
       exteriorDoors.forEach((rig) => rig.dispose());
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());
+      texturesToDispose.forEach((t) => t.dispose());
     },
   };
 }

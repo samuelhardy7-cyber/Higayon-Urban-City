@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { ProceduralAudio } from './audio';
 import {
   createCharacterAnimRuntime,
@@ -146,8 +145,10 @@ import { nextTimeOfDay, TIME_PRESETS } from './timeOfDay';
 import { stepTrafficAndPolice } from './trafficSystem';
 import type {
   AccessoryId,
+  AirportSpec,
   BuildingEntranceSpec,
   CharacterCustomization,
+  CityId,
   DrivingInputState,
   ExteriorLadderSpec,
   GamePhase,
@@ -185,13 +186,17 @@ import {
   findSafeVehicleExitPos,
   resolveVehiclesPairwise,
   stepPlayerVehiclePhysics,
+  VEHICLE_INTERACT_RANGE,
 } from './vehiclePhysics';
 import {
   CITY_LAYOUT,
+  getCityAt,
   getDistrictAt,
   getGroundHeightAt,
+  getWaterInfoAt,
   raycastCameraCollision,
   resolveCircleAABBCollision,
+  WATER_SURFACE_Y,
 } from './worldData';
 
 function detectSoftwareGl(): boolean {
@@ -230,11 +235,71 @@ export interface EngineCallbacks {
     floor: number;
   }) => void;
   onOpenRewardShop?: () => void;
+  onOpenFlightModal?: (params: {
+    originAirportId: string;
+    originAirportName: string;
+    originAirportCode: string;
+    originCityId: CityId;
+    originCityName: string;
+  }) => void;
   onTriggerSocialEmote?: (targetPlayerId: string, emote: EmoteKind) => void;
   onPhotoModeChange?: (state: PhotoModeState) => void;
 }
 
 const _tmpColor = new THREE.Color();
+
+function createOutdoorEnvScene(): { scene: THREE.Scene; dispose: () => void } {
+  const envScene = new THREE.Scene();
+  const geos: THREE.BufferGeometry[] = [];
+  const mats: THREE.Material[] = [];
+
+  const skyGeo = new THREE.SphereGeometry(20, 24, 16);
+  const skyMat = new THREE.MeshBasicMaterial({ color: 0x9cd3ff, side: THREE.BackSide });
+  geos.push(skyGeo);
+  mats.push(skyMat);
+  envScene.add(new THREE.Mesh(skyGeo, skyMat));
+
+  const horizonGeo = new THREE.CylinderGeometry(18, 18, 6, 24, 1, true);
+  const horizonMat = new THREE.MeshBasicMaterial({ color: 0xe6f2ff, side: THREE.BackSide });
+  geos.push(horizonGeo);
+  mats.push(horizonMat);
+  const horizonMesh = new THREE.Mesh(horizonGeo, horizonMat);
+  horizonMesh.position.y = 0.5;
+  envScene.add(horizonMesh);
+
+  const groundGeo = new THREE.CircleGeometry(18, 24);
+  const groundMat = new THREE.MeshBasicMaterial({ color: 0x5c5b57 });
+  geos.push(groundGeo);
+  mats.push(groundMat);
+  const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+  groundMesh.rotation.x = -Math.PI / 2;
+  groundMesh.position.y = -3.0;
+  envScene.add(groundMesh);
+
+  const sunDiscGeo = new THREE.SphereGeometry(3.4, 16, 12);
+  const sunDiscMat = new THREE.MeshBasicMaterial({ color: 0xfff3d4 });
+  geos.push(sunDiscGeo);
+  mats.push(sunDiscMat);
+  const sunDisc = new THREE.Mesh(sunDiscGeo, sunDiscMat);
+  sunDisc.position.set(8, 13, 6);
+  envScene.add(sunDisc);
+
+  const bounceGeo = new THREE.SphereGeometry(4.5, 12, 10);
+  const bounceMat = new THREE.MeshBasicMaterial({ color: 0x7cb8eb });
+  geos.push(bounceGeo);
+  mats.push(bounceMat);
+  const bounce = new THREE.Mesh(bounceGeo, bounceMat);
+  bounce.position.set(-10, 8, -8);
+  envScene.add(bounce);
+
+  return {
+    scene: envScene,
+    dispose: () => {
+      geos.forEach((g) => g.dispose());
+      mats.forEach((m) => m.dispose());
+    },
+  };
+}
 
 interface MissionBeaconMesh {
   missionId: string;
@@ -260,6 +325,7 @@ export class UrbanWorldEngine {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private sunLight: THREE.DirectionalLight;
+  private fillLight: THREE.DirectionalLight;
   private hemiLight: THREE.HemisphereLight;
   private builtCity: BuiltCity;
   private isSoftwareGl: boolean;
@@ -320,6 +386,25 @@ export class UrbanWorldEngine {
   private transitionStartPos = { x: 0, y: 0, z: 0, yaw: 0 };
   private transitionEndPos = { x: 0, y: 0, z: 0, yaw: 0 };
 
+  // Intercity Airplane Travel Sequence
+  private flightJetGroup!: THREE.Group;
+  private flightSequence: {
+    originCityName: string;
+    destCityId: CityId;
+    destCityName: string;
+    destAirportName: string;
+    destAirportCode: string;
+    startX: number;
+    startZ: number;
+    endX: number;
+    endZ: number;
+    arrivalSpawnX: number;
+    arrivalSpawnZ: number;
+    arrivalSpawnYaw: number;
+    timer: number;
+    duration: number;
+  } | null = null;
+
   private missionRuntime: MissionRuntimeState = createInitialMissionRuntime();
   private missionBeacons: MissionBeaconMesh[] = [];
   private activeObjectiveBeacon: { group: THREE.Group; ring: THREE.Mesh; beam: THREE.Mesh };
@@ -338,6 +423,7 @@ export class UrbanWorldEngine {
     | 'pin'
     | 'elevator'
     | 'shop'
+    | 'flight'
     | 'emotes'
     | 'social'
     | 'photo' = 'none';
@@ -430,7 +516,7 @@ export class UrbanWorldEngine {
       powerPreference: 'high-performance',
     });
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2.5));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
@@ -445,35 +531,44 @@ export class UrbanWorldEngine {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xd7e9f6);
-    this.scene.fog = new THREE.FogExp2(0xd7e9f6, 0.0038);
+    this.scene.fog = new THREE.FogExp2(0xd7e9f6, 0.0021);
 
-    this.camera = new THREE.PerspectiveCamera(62, width / height, 0.15, 650);
+    this.camera = new THREE.PerspectiveCamera(62, width / height, 0.15, 1650);
 
     const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
-    const envTex = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    const outdoorEnv = createOutdoorEnvScene();
+    const envTex = pmremGenerator.fromScene(outdoorEnv.scene, 0.04).texture;
     this.scene.environment = envTex;
+    outdoorEnv.dispose();
     pmremGenerator.dispose();
     this.disposeCallbacks.push(() => envTex.dispose());
 
-    this.hemiLight = new THREE.HemisphereLight(0x9bc8eb, 0x5e564a, 0.78);
+    this.hemiLight = new THREE.HemisphereLight(0x9bc8eb, 0x5e564a, 0.8);
     this.scene.add(this.hemiLight);
 
-    this.sunLight = new THREE.DirectionalLight(0xfff3dc, 2.0);
+    this.sunLight = new THREE.DirectionalLight(0xfff3dc, 2.05);
     this.sunLight.position.set(52, 86, 42);
     this.sunLight.castShadow = !this.isSoftwareGl;
-    this.sunLight.shadow.mapSize.width = 1024;
-    this.sunLight.shadow.mapSize.height = 1024;
+    this.sunLight.shadow.mapSize.width = 2048;
+    this.sunLight.shadow.mapSize.height = 2048;
     this.sunLight.shadow.camera.near = 5;
-    this.sunLight.shadow.camera.far = 220;
-    const shadowBound = 52;
+    this.sunLight.shadow.camera.far = 210;
+    const shadowBound = 46;
     this.sunLight.shadow.camera.left = -shadowBound;
     this.sunLight.shadow.camera.right = shadowBound;
     this.sunLight.shadow.camera.top = shadowBound;
     this.sunLight.shadow.camera.bottom = -shadowBound;
-    this.sunLight.shadow.bias = -0.0005;
-    this.sunLight.shadow.normalBias = 0.02;
+    this.sunLight.shadow.bias = -0.0003;
+    this.sunLight.shadow.normalBias = 0.015;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
+
+    // Cool sky opposite fill / rim light for sculpted depth on faces, clothes, and facades
+    this.fillLight = new THREE.DirectionalLight(0x9ecbff, 0.36);
+    this.fillLight.position.set(-48, 38, -42);
+    this.fillLight.castShadow = false;
+    this.scene.add(this.fillLight);
+    this.scene.add(this.fillLight.target);
 
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
     const textures = createCityTextures(maxAniso);
@@ -485,6 +580,60 @@ export class UrbanWorldEngine {
     this.skyLifeState = createSkyLifeState();
     this.skyLifeRig = buildSkyLifeVisuals(this.skyLifeState);
     this.scene.add(this.skyLifeRig.group);
+
+    // Intercity Player Flight Jetliner (visible during active city-to-city flight)
+    const fjGroup = new THREE.Group();
+    const fjWhite = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.24, metalness: 0.32 });
+    const fjBlue = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.32, metalness: 0.25 });
+    const fjDark = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.65 });
+    const fjGlass = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.14, metalness: 0.68 });
+    const fjRed = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+    const fjGreen = new THREE.MeshBasicMaterial({ color: 0x10b981 });
+
+    const fjGeos: THREE.BufferGeometry[] = [];
+    const tfg = <T extends THREE.BufferGeometry>(g: T): T => {
+      fjGeos.push(g);
+      return g;
+    };
+    const fjFuse = new THREE.Mesh(tfg(new THREE.CapsuleGeometry(1.15, 13.5, 8, 16)), fjWhite);
+    fjFuse.rotation.x = Math.PI * 0.5;
+    fjFuse.castShadow = !this.isSoftwareGl;
+    const fjStripe = new THREE.Mesh(tfg(new THREE.CylinderGeometry(1.18, 1.18, 10.5, 14)), fjBlue);
+    fjStripe.rotation.x = Math.PI * 0.5;
+    fjStripe.scale.set(1, 1, 0.34);
+    const fjCockpit = new THREE.Mesh(tfg(new THREE.SphereGeometry(0.95, 10, 8)), fjGlass);
+    fjCockpit.scale.set(0.95, 0.6, 1.4);
+    fjCockpit.position.set(0, 0.48, -6.2);
+    const fjWingL = new THREE.Mesh(tfg(new THREE.BoxGeometry(8.2, 0.2, 2.3)), fjWhite);
+    fjWingL.position.set(-4.1, -0.15, 0.4);
+    fjWingL.rotation.y = 0.25;
+    const fjWingR = new THREE.Mesh(tfg(new THREE.BoxGeometry(8.2, 0.2, 2.3)), fjWhite);
+    fjWingR.position.set(4.1, -0.15, 0.4);
+    fjWingR.rotation.y = -0.25;
+    const fjEngGeo = tfg(new THREE.CylinderGeometry(0.45, 0.4, 1.8, 12));
+    for (const ex of [-3.0, 3.0]) {
+      const eng = new THREE.Mesh(fjEngGeo, fjDark);
+      eng.rotation.x = Math.PI * 0.5;
+      eng.position.set(ex, -0.58, 0);
+      fjGroup.add(eng);
+    }
+    const fjTail = new THREE.Mesh(tfg(new THREE.BoxGeometry(0.22, 2.8, 2.1)), fjBlue);
+    fjTail.position.set(0, 1.75, 6.2);
+    fjTail.rotation.x = -0.28;
+    const fjHTail = new THREE.Mesh(tfg(new THREE.BoxGeometry(5.2, 0.16, 1.3)), fjWhite);
+    fjHTail.position.set(0, 0.35, 6.4);
+    const fjNavL = new THREE.Mesh(tfg(new THREE.SphereGeometry(0.2, 6, 6)), fjRed);
+    fjNavL.position.set(-7.9, -0.1, 1.45);
+    const fjNavR = new THREE.Mesh(tfg(new THREE.SphereGeometry(0.2, 6, 6)), fjGreen);
+    fjNavR.position.set(7.9, -0.1, 1.45);
+    fjGroup.add(fjFuse, fjStripe, fjCockpit, fjWingL, fjWingR, fjTail, fjHTail, fjNavL, fjNavR);
+    fjGroup.visible = false;
+    this.flightJetGroup = fjGroup;
+    this.scene.add(this.flightJetGroup);
+    this.disposeCallbacks.push(() => {
+      fjGeos.forEach((g) => g.dispose());
+      [fjWhite, fjBlue, fjDark, fjGlass, fjRed, fjGreen].forEach((m) => m.dispose());
+    });
 
     this.playerRig = createCharacterRig(textures.contactShadowMap, !this.isSoftwareGl, {
       fabricBumpMap: textures.fabricBumpMap,
@@ -658,6 +807,8 @@ export class UrbanWorldEngine {
     this.hemiLight.color.setHex(p.hemiSky);
     this.hemiLight.groundColor.setHex(p.hemiGround);
     this.hemiLight.intensity = p.hemiIntensity;
+    this.fillLight.color.setHex(p.hemiSky);
+    this.fillLight.intensity = Math.max(0.18, p.hemiIntensity * 0.44);
     this.scene.environmentIntensity = p.envIntensity;
 
     this.builtCity.lampBulbMat.emissiveIntensity = p.lampEmissiveIntensity;
@@ -672,6 +823,18 @@ export class UrbanWorldEngine {
     const p = TIME_PRESETS[this.timeOfDay];
     const lambda = 5.5;
     const alpha = 1 - Math.exp(-lambda * dt);
+
+    const camWater = getWaterInfoAt(
+      this.camera.position.x,
+      this.camera.position.z,
+      this.camera.position.y,
+      CITY_LAYOUT,
+    );
+    const cameraSubmerged =
+      !this.activeBlueprint &&
+      this.phase === 'playing' &&
+      camWater.inWater &&
+      this.camera.position.y < WATER_SURFACE_Y - 0.08;
 
     _tmpColor.setHex(p.skyTop);
     this.builtCity.skyUniforms.topColor.value.lerp(_tmpColor, alpha);
@@ -700,30 +863,54 @@ export class UrbanWorldEngine {
     );
     this.builtCity.skyUniforms.sunDir.value.normalize();
 
-    _tmpColor.setHex(p.fogColor);
-    (this.scene.background as THREE.Color).lerp(_tmpColor, alpha);
     const fog = this.scene.fog as THREE.FogExp2;
-    fog.color.lerp(_tmpColor, alpha);
-    fog.density = dampValue(fog.density, p.fogDensity, lambda, dt);
+    if (cameraSubmerged) {
+      const subAlpha = 1 - Math.exp(-9.5 * dt);
+      _tmpColor.setHex(0x0b4f6c);
+      (this.scene.background as THREE.Color).lerp(_tmpColor, subAlpha);
+      fog.color.lerp(_tmpColor, subAlpha);
+      fog.density = dampValue(fog.density, 0.025, 9.5, dt);
 
-    _tmpColor.setHex(p.sunColor);
-    this.sunLight.color.lerp(_tmpColor, alpha);
-    this.sunLight.intensity = dampValue(this.sunLight.intensity, p.sunIntensity, lambda, dt);
+      _tmpColor.setHex(p.sunColor);
+      this.sunLight.color.lerp(_tmpColor, alpha);
+      this.sunLight.intensity = dampValue(this.sunLight.intensity, Math.max(0.55, p.sunIntensity * 0.58), 8, dt);
+
+      _tmpColor.setHex(0x38bdf8);
+      this.hemiLight.color.lerp(_tmpColor, subAlpha);
+      this.fillLight.color.lerp(_tmpColor, subAlpha);
+      _tmpColor.setHex(0x083344);
+      this.hemiLight.groundColor.lerp(_tmpColor, subAlpha);
+      this.hemiLight.intensity = dampValue(this.hemiLight.intensity, Math.max(0.75, p.hemiIntensity * 1.1), 8, dt);
+      this.fillLight.intensity = Math.max(0.24, this.hemiLight.intensity * 0.5);
+      this.scene.environmentIntensity = dampValue(this.scene.environmentIntensity, p.envIntensity * 0.65, 8, dt);
+    } else {
+      _tmpColor.setHex(p.fogColor);
+      (this.scene.background as THREE.Color).lerp(_tmpColor, alpha);
+      fog.color.lerp(_tmpColor, alpha);
+      fog.density = dampValue(fog.density, p.fogDensity, lambda, dt);
+
+      _tmpColor.setHex(p.sunColor);
+      this.sunLight.color.lerp(_tmpColor, alpha);
+      this.sunLight.intensity = dampValue(this.sunLight.intensity, p.sunIntensity, lambda, dt);
+
+      _tmpColor.setHex(p.hemiSky);
+      this.hemiLight.color.lerp(_tmpColor, alpha);
+      this.fillLight.color.lerp(_tmpColor, alpha);
+      _tmpColor.setHex(p.hemiGround);
+      this.hemiLight.groundColor.lerp(_tmpColor, alpha);
+      this.hemiLight.intensity = dampValue(this.hemiLight.intensity, p.hemiIntensity, lambda, dt);
+      this.fillLight.intensity = Math.max(0.18, this.hemiLight.intensity * 0.44);
+      this.scene.environmentIntensity = dampValue(
+        this.scene.environmentIntensity,
+        p.envIntensity,
+        lambda,
+        dt,
+      );
+    }
+
     this.sunOffset.x = dampValue(this.sunOffset.x, p.sunPosition[0], lambda, dt);
     this.sunOffset.y = dampValue(this.sunOffset.y, p.sunPosition[1], lambda, dt);
     this.sunOffset.z = dampValue(this.sunOffset.z, p.sunPosition[2], lambda, dt);
-
-    _tmpColor.setHex(p.hemiSky);
-    this.hemiLight.color.lerp(_tmpColor, alpha);
-    _tmpColor.setHex(p.hemiGround);
-    this.hemiLight.groundColor.lerp(_tmpColor, alpha);
-    this.hemiLight.intensity = dampValue(this.hemiLight.intensity, p.hemiIntensity, lambda, dt);
-    this.scene.environmentIntensity = dampValue(
-      this.scene.environmentIntensity,
-      p.envIntensity,
-      lambda,
-      dt,
-    );
 
     this.builtCity.lampBulbMat.emissiveIntensity = dampValue(
       this.builtCity.lampBulbMat.emissiveIntensity,
@@ -813,7 +1000,7 @@ export class UrbanWorldEngine {
       this.sunLight.castShadow = true;
       this.sunLight.shadow.mapSize.set(1024, 1024);
     } else {
-      this.renderer.setPixelRatio(Math.min(dpr, 2));
+      this.renderer.setPixelRatio(Math.min(dpr, 2.5));
       this.renderer.shadowMap.enabled = true;
       this.sunLight.castShadow = true;
       this.sunLight.shadow.mapSize.set(2048, 2048);
@@ -1210,12 +1397,38 @@ export class UrbanWorldEngine {
   public setMultiplayerPlayers(selfPlayerId: string | null, players: RemotePlayerState[]): void {
     this.selfMultiplayerId = selfPlayerId;
     const activeIds = new Set<string>();
+    let overlapAtDefaultSpawn = false;
+    const nearDefaultSpawn =
+      !this.activeBlueprint &&
+      this.playerMode === 'on_foot' &&
+      Math.hypot(this.playerState.x, this.playerState.z - 16) < 0.75;
+
     for (const p of players) {
       if (selfPlayerId && p.playerId === selfPlayerId) continue;
       if (p.connectionStatus === 'offline') continue;
+      if (
+        nearDefaultSpawn &&
+        !p.currentBuilding &&
+        Math.hypot(p.position.x - this.playerState.x, p.position.z - this.playerState.z) < 1.25
+      ) {
+        overlapAtDefaultSpawn = true;
+      }
       activeIds.add(p.playerId);
       this.upsertRemotePlayer(p);
     }
+
+    if (overlapAtDefaultSpawn && selfPlayerId) {
+      let hash = 0;
+      for (let i = 0; i < selfPlayerId.length; i++) {
+        hash = (hash * 31 + selfPlayerId.charCodeAt(i)) | 0;
+      }
+      const laneOffsets = [-2.4, -1.45, 1.45, 2.4, -3.2, 3.2];
+      const slotX = laneOffsets[Math.abs(hash) % laneOffsets.length];
+      const slotZ = 16 + (((Math.abs(hash) >> 3) % 3) - 1) * 0.9;
+      this.playerState.x = slotX;
+      this.playerState.z = slotZ;
+    }
+
     for (const existingId of [...this.remoteAvatars.keys()]) {
       if (!activeIds.has(existingId)) {
         this.removeRemotePlayer(existingId);
@@ -1328,25 +1541,37 @@ export class UrbanWorldEngine {
   public getLocalMultiplayerState() {
     const activeVehicle = this.getActiveVehicle();
     let movementState: PlayerMovementState = 'idle';
-    if (this.playerMode === 'driving') {
+    if (this.playerMode === 'flying') {
+      movementState = 'flying';
+    } else if (this.playerMode === 'driving') {
       movementState = 'driving';
+    } else if (this.playerState.inWater) {
+      movementState = this.playerState.isUnderwater ? 'diving' : 'swimming';
     } else if (!this.playerState.grounded) {
       movementState = 'jumping';
     } else if (this.playerState.isMoving) {
       movementState = this.playerState.isSprinting ? 'running' : 'walking';
     }
 
-    const currentActivity = this.previewMode === 'quiz'
-      ? 'Answering Quiz'
-      : this.activeSitSpot
-        ? 'Seated'
-        : this.activeBlueprint
-          ? `Inside ${this.activeBlueprint.name}`
-          : this.playerMode === 'driving' && activeVehicle
-            ? `Driving ${activeVehicle.label}`
-            : this.missionRuntime.activeMission
-              ? `Mission: ${this.missionRuntime.activeMission.title}`
-              : 'Exploring City';
+    const currentActivity = this.playerMode === 'flying'
+      ? `Flying to ${this.flightSequence?.destCityName ?? 'City'}`
+      : this.previewMode === 'quiz'
+        ? 'Answering Quiz'
+        : this.activeSitSpot
+          ? 'Seated'
+          : this.activeBlueprint
+            ? `Inside ${this.activeBlueprint.name}`
+            : this.playerMode === 'driving' && activeVehicle
+              ? activeVehicle.kind === 'submarine'
+                ? 'Diving Submarine'
+                : `Driving ${activeVehicle.label}`
+              : this.playerState.isUnderwater
+                ? 'Diving Ocean Reef'
+                : this.playerState.inWater
+                  ? 'Swimming in Bay'
+                  : this.missionRuntime.activeMission
+                    ? `Mission: ${this.missionRuntime.activeMission.title}`
+                    : 'Exploring City';
 
     return {
       position: {
@@ -1417,9 +1642,14 @@ export class UrbanWorldEngine {
           vy: 0,
           grounded: entry.state.grounded,
           isSprinting: t.movementState === 'running',
-          isMoving: entry.state.speed > 0.28 || t.movementState === 'walking' || t.movementState === 'running',
+          isMoving:
+            entry.state.speed > 0.28 ||
+            t.movementState === 'walking' ||
+            t.movementState === 'running' ||
+            t.movementState === 'swimming' ||
+            t.movementState === 'diving',
           isDriving: t.movementState === 'driving',
-          isMotorcycle: t.vehicleKind === 'motor',
+          isMotorcycle: t.vehicleKind === 'motor' || t.vehicleKind === 'jetski' || t.vehicleKind === 'speedboat',
           onStairs: entry.state.onStairs,
           stairDirection: t.animState === 'descend_stairs' ? 'down' : t.animState === 'climb_stairs' ? 'up' : 'none',
           climbingLadder: entry.state.climbingLadder || t.animState === 'climb_ladder',
@@ -1428,6 +1658,8 @@ export class UrbanWorldEngine {
           photoPose: (entry.state.photoPose as PhotoModeState['pose'] | null) ?? null,
           backward: t.animState === 'walk_backward',
           sitting: entry.state.onSeat || t.animState === 'sit' || entry.state.photoPose === 'sit',
+          swimming: t.movementState === 'swimming' || t.movementState === 'diving',
+          underwater: t.movementState === 'diving',
           elapsedTime: elapsed,
         },
         dt,
@@ -1544,6 +1776,7 @@ export class UrbanWorldEngine {
       | 'pin'
       | 'elevator'
       | 'shop'
+      | 'flight'
       | 'emotes'
       | 'social'
       | 'photo',
@@ -1571,7 +1804,12 @@ export class UrbanWorldEngine {
       }
     } else if (this.playerMode === 'driving') {
       const activeV = this.getActiveVehicle();
-      if (activeV && !VEHICLE_SPECS[activeV.kind].isMotorcycle) {
+      if (
+        activeV &&
+        !VEHICLE_SPECS[activeV.kind].isMotorcycle &&
+        activeV.kind !== 'jetski' &&
+        activeV.kind !== 'speedboat'
+      ) {
         this.playerRig.root.visible = false;
       }
     } else {
@@ -1643,6 +1881,8 @@ export class UrbanWorldEngine {
     applyCharacterCustomization(this.playerRig, this.progression.customization);
     this.syncGarageVehicleInWorld(false);
     this.activeVehicleId = null;
+    this.flightSequence = null;
+    this.flightJetGroup.visible = false;
     this.playerMode = 'on_foot';
     this.playerRig.root.visible = true;
     this.drivingCamOrbitYaw = 0;
@@ -1658,18 +1898,23 @@ export class UrbanWorldEngine {
     let idx = this.vehicles.findIndex((v) => v.id === 'veh_player_garage');
     const spec = VEHICLE_SPECS[kind];
 
+    const isMarine = spec.domain === 'water' || spec.domain === 'submersible';
+    const spawnDraft = spec.draftDepth ?? 0.35;
+
     if (idx === -1) {
-      const sx = 3.1;
-      const sz = 21.5;
+      const sx = isMarine ? 120 : 3.1;
+      const sz = isMarine ? 48 : 21.5;
       const personal: VehicleState = {
         id: 'veh_player_garage',
         kind,
         label: `My ${spec.label}`,
         x: sx,
-        y: getGroundHeightAt(sx, sz, CITY_LAYOUT),
+        y: isMarine ? WATER_SURFACE_Y - spawnDraft : getGroundHeightAt(sx, sz, CITY_LAYOUT),
         z: sz,
         yaw: 0,
         speed: 0,
+        pitch: 0,
+        verticalSpeed: 0,
         steerAngle: 0,
         wheelSpin: 0,
         leanAngle: 0,
@@ -1716,13 +1961,40 @@ export class UrbanWorldEngine {
       const fwdZ = -Math.cos(this.playerState.yaw);
       const rightX = Math.cos(this.playerState.yaw);
       const rightZ = -Math.sin(this.playerState.yaw);
-      const tx = this.playerState.x + rightX * 3.4 + fwdX * 1.5;
-      const tz = this.playerState.z + rightZ * 3.4 + fwdZ * 1.5;
-      const resolved = resolveCircleAABBCollision(tx, tz, 2.2, 0, 1.8, CITY_LAYOUT);
-      veh.x = resolved.x;
-      veh.z = resolved.z;
-      veh.y = getGroundHeightAt(veh.x, veh.z, CITY_LAYOUT);
-      veh.yaw = this.playerState.yaw;
+      if (isMarine) {
+        const tx = this.playerState.x + fwdX * 5.2 + rightX * 1.5;
+        const tz = this.playerState.z + fwdZ * 5.2 + rightZ * 1.5;
+        const nearWater = getWaterInfoAt(tx, tz, this.playerState.y, CITY_LAYOUT);
+        if (nearWater.inWater && nearWater.depth >= spawnDraft + 0.5) {
+          veh.x = tx;
+          veh.z = tz;
+          veh.y = nearWater.waterSurfaceY - spawnDraft;
+          veh.yaw = this.playerState.yaw;
+        } else {
+          // Deliver to nearest harbor dock when player calls from inland
+          const libertyPier = { x: 124, z: 48, yaw: -Math.PI * 0.5 };
+          const emeraldMarina = { x: 214, z: 22, yaw: Math.PI * 0.5 };
+          const distLib = Math.hypot(this.playerState.x - libertyPier.x, this.playerState.z - libertyPier.z);
+          const distEm = Math.hypot(this.playerState.x - emeraldMarina.x, this.playerState.z - emeraldMarina.z);
+          const dock = distEm < distLib ? emeraldMarina : libertyPier;
+          veh.x = dock.x;
+          veh.z = dock.z;
+          veh.y = WATER_SURFACE_Y - spawnDraft;
+          veh.yaw = dock.yaw;
+        }
+        veh.pitch = 0;
+        veh.verticalSpeed = 0;
+      } else {
+        const tx = this.playerState.x + rightX * 3.4 + fwdX * 1.5;
+        const tz = this.playerState.z + rightZ * 3.4 + fwdZ * 1.5;
+        const resolved = resolveCircleAABBCollision(tx, tz, 2.2, 0, 1.8, CITY_LAYOUT);
+        veh.x = resolved.x;
+        veh.z = resolved.z;
+        veh.y = getGroundHeightAt(veh.x, veh.z, CITY_LAYOUT);
+        veh.yaw = this.playerState.yaw;
+        veh.pitch = 0;
+        veh.verticalSpeed = 0;
+      }
       veh.speed = 0;
       veh.occupant = 'none';
     }
@@ -1768,7 +2040,15 @@ export class UrbanWorldEngine {
     }
     this.audio.playCash();
     this.syncGarageVehicleInWorld(true);
-    this.showActivityToast(`Delivered ${VEHICLE_SPECS[this.progression.activeGarageVehicle].label} nearby!`);
+    const kind = this.progression.activeGarageVehicle;
+    const spec = VEHICLE_SPECS[kind];
+    const veh = this.vehicles.find((v) => v.id === 'veh_player_garage');
+    const dist = veh ? Math.hypot(veh.x - this.playerState.x, veh.z - this.playerState.z) : 0;
+    if ((spec.domain === 'water' || spec.domain === 'submersible') && dist > 18) {
+      this.showActivityToast(`Delivered ${spec.label} to Harbor Marina!`);
+    } else {
+      this.showActivityToast(`Delivered ${spec.label} nearby!`);
+    }
     this.pushHudSnapshot(true);
   }
 
@@ -1924,7 +2204,17 @@ export class UrbanWorldEngine {
 
     if (saved.playerPos) {
       this.playerState.x = saved.playerPos.x;
-      this.playerState.y = getGroundHeightAt(saved.playerPos.x, saved.playerPos.z, CITY_LAYOUT);
+      const savedWater = getWaterInfoAt(saved.playerPos.x, saved.playerPos.z, saved.playerPos.y, CITY_LAYOUT);
+      if (savedWater.inWater && savedWater.depth > 1.2 && saved.playerPos.y < savedWater.waterSurfaceY - 0.15) {
+        this.playerState.y = Math.max(savedWater.seabedY + 0.1, Math.min(savedWater.waterSurfaceY - 0.85, saved.playerPos.y));
+        this.playerState.inWater = true;
+        this.playerState.grounded = false;
+        this.playerState.isUnderwater = this.playerState.y < savedWater.waterSurfaceY - 1.48;
+      } else {
+        this.playerState.y = getGroundHeightAt(saved.playerPos.x, saved.playerPos.z, CITY_LAYOUT);
+        this.playerState.inWater = false;
+        this.playerState.isUnderwater = false;
+      }
       this.playerState.z = saved.playerPos.z;
       this.playerState.yaw = saved.playerPos.yaw;
       this.playerState.cameraYaw = saved.playerPos.yaw;
@@ -2020,6 +2310,12 @@ export class UrbanWorldEngine {
       this.input.jumpJustPressed = true;
     }
     this.input.jumpHeld = held;
+    this.drivingInput.ascend = held;
+  }
+
+  public triggerMobileDive(held: boolean): void {
+    this.input.diveHeld = held;
+    this.drivingInput.dive = held;
   }
 
   public setMobileDrivingInput(field: keyof DrivingInputState, held: boolean): void {
@@ -2167,6 +2463,11 @@ export class UrbanWorldEngine {
         return;
       }
 
+      if (nearInt.kind === 'board_flight') {
+        this.openFlightModalForCurrentAirport();
+        return;
+      }
+
       if (nearInt.kind === 'sit_seat') {
         this.toggleSit();
         return;
@@ -2181,12 +2482,13 @@ export class UrbanWorldEngine {
       vehicle.occupant = 'none';
       vehicle.isBraking = true;
       const spec = VEHICLE_SPECS[vehicle.kind];
+      const openRider = spec.isMotorcycle || vehicle.kind === 'jetski' || vehicle.kind === 'speedboat';
       const seat = computeVehicleSeatWorldPos(vehicle);
       const exit = findSafeVehicleExitPos(vehicle, CITY_LAYOUT);
 
       this.transitionStartPos = {
         x: seat.x,
-        y: vehicle.y + (spec.isMotorcycle ? 0.14 : 0.04),
+        y: vehicle.y + (openRider ? 0.14 : 0.04),
         z: seat.z,
         yaw: vehicle.yaw,
       };
@@ -2251,6 +2553,8 @@ export class UrbanWorldEngine {
       this.playerState.x,
       this.playerState.z,
       this.vehicles,
+      VEHICLE_INTERACT_RANGE,
+      this.playerState.y,
     );
     const nearMission = findNearestMissionStart(
       this.playerState.x,
@@ -2263,11 +2567,18 @@ export class UrbanWorldEngine {
       this.playerState.z,
       this.outdoorKiosks,
     );
+    const nearGateJet = this.findNearestOutdoorGateJet();
 
     const candidates: Array<{
-      kind: 'rooftop_enter' | 'climb_ladder' | 'entrance' | 'vehicle' | 'mission' | 'quiz';
+      kind: 'rooftop_enter' | 'climb_ladder' | 'entrance' | 'vehicle' | 'mission' | 'quiz' | 'board_flight';
       dist: number;
     }> = [];
+    if (nearGateJet) {
+      candidates.push({
+        kind: 'board_flight',
+        dist: Math.hypot(nearGateJet.gateJetX - this.playerState.x, nearGateJet.gateJetZ - this.playerState.z) * 0.4,
+      });
+    }
     if (nearRooftopDoor) {
       candidates.push({ kind: 'rooftop_enter', dist: nearRooftopDoor.distance });
     }
@@ -2280,7 +2591,7 @@ export class UrbanWorldEngine {
         dist: Math.hypot(nearEntrance.doorX - this.playerState.x, nearEntrance.doorZ - this.playerState.z),
       });
     }
-    if (nearVehicle && Math.abs(this.playerState.y - nearVehicle.y) < 2.2) {
+    if (nearVehicle && Math.abs(this.playerState.y - nearVehicle.y) < 3.6) {
       candidates.push({
         kind: 'vehicle',
         dist: Math.hypot(nearVehicle.x - this.playerState.x, nearVehicle.z - this.playerState.z),
@@ -2301,7 +2612,9 @@ export class UrbanWorldEngine {
     candidates.sort((a, b) => a.dist - b.dist);
 
     const chosen = candidates[0]?.kind;
-    if (chosen === 'rooftop_enter' && nearRooftopDoor) {
+    if (chosen === 'board_flight') {
+      this.openFlightModalForCurrentAirport();
+    } else if (chosen === 'rooftop_enter' && nearRooftopDoor) {
       const targetEntrance = CITY_LAYOUT.entrances.find(
         (e) => e.buildingId === nearRooftopDoor.rooftop.buildingId,
       );
@@ -2335,6 +2648,119 @@ export class UrbanWorldEngine {
     } else if (chosen === 'quiz' && nearKiosk) {
       this.openQuizForKiosk(nearKiosk);
     }
+  }
+
+  private findNearestOutdoorGateJet(): AirportSpec | null {
+    if (this.activeBlueprint || this.playerState.y > 3.5) return null;
+    let best: AirportSpec | null = null;
+    let bestDist = 11.2;
+    for (const ap of CITY_LAYOUT.airports) {
+      const d = Math.hypot(ap.gateJetX - this.playerState.x, ap.gateJetZ - this.playerState.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = ap;
+      }
+    }
+    return best;
+  }
+
+  private resolveCurrentAirport(): AirportSpec {
+    if (this.activeEntrance) {
+      const byTerm = CITY_LAYOUT.airports.find(
+        (ap) => ap.terminalBuildingId === this.activeEntrance!.buildingId,
+      );
+      if (byTerm) return byTerm;
+    }
+    const px = this.activeEntrance ? this.activeEntrance.doorX : this.playerState.x;
+    const pz = this.activeEntrance ? this.activeEntrance.doorZ : this.playerState.z;
+    let best = CITY_LAYOUT.airports[0];
+    let bestD = Number.POSITIVE_INFINITY;
+    for (const ap of CITY_LAYOUT.airports) {
+      const d = Math.hypot(ap.centerX - px, ap.centerZ - pz);
+      if (d < bestD) {
+        bestD = d;
+        best = ap;
+      }
+    }
+    return best;
+  }
+
+  private openFlightModalForCurrentAirport(): void {
+    const originAp = this.resolveCurrentAirport();
+    const originCity = CITY_LAYOUT.cities.find((c) => c.id === originAp.cityId) ?? CITY_LAYOUT.cities[0];
+    triggerCharacterAction(this.playerAnimRuntime, 'press_button', 0.9, false);
+    this.audio.playUiClick();
+    this.setPreviewMode('flight');
+    this.callbacks.onOpenFlightModal?.({
+      originAirportId: originAp.id,
+      originAirportName: originAp.name,
+      originAirportCode: originAp.code,
+      originCityId: originCity.id,
+      originCityName: originCity.name,
+    });
+  }
+
+  public flyToCity(destCityId: CityId): void {
+    if (this.phase !== 'playing') return;
+    const originAp = this.resolveCurrentAirport();
+    const originCity = CITY_LAYOUT.cities.find((c) => c.id === originAp.cityId) ?? CITY_LAYOUT.cities[0];
+    const destAp = CITY_LAYOUT.airports.find((ap) => ap.cityId === destCityId);
+    const destCity = CITY_LAYOUT.cities.find((c) => c.id === destCityId);
+    if (!destAp || !destCity) return;
+
+    this.setPreviewMode('none');
+    if (this.activeBlueprint) {
+      this.exitInteriorToCity();
+    }
+    this.clearHeldInputs();
+    this.activeLadder = null;
+    this.activeSitSpot = null;
+    this.buildingTransition = null;
+    this.transitionFade = 0;
+
+    this.playerMode = 'flying';
+    document.body.dataset.mode = this.playerMode;
+    this.playerRig.root.visible = false;
+
+    const startX = originAp.gateJetX;
+    const startZ = originAp.runwayZ;
+    const endX = destAp.gateJetX;
+    const endZ = destAp.runwayZ;
+    const yaw = Math.atan2(-(endX - startX), -(endZ - startZ));
+
+    this.flightSequence = {
+      originCityName: originCity.name,
+      destCityId: destCity.id,
+      destCityName: destCity.name,
+      destAirportName: destAp.name,
+      destAirportCode: destAp.code,
+      startX,
+      startZ,
+      endX,
+      endZ,
+      arrivalSpawnX: destAp.arrivalSpawnX,
+      arrivalSpawnZ: destAp.arrivalSpawnZ,
+      arrivalSpawnYaw: destAp.arrivalSpawnYaw,
+      timer: 0,
+      duration: 4.8,
+    };
+
+    this.flightJetGroup.visible = true;
+    this.flightJetGroup.position.set(startX, 1.9, startZ);
+    this.flightJetGroup.rotation.set(0, yaw, 0, 'YXZ');
+    this.playerState.x = startX;
+    this.playerState.y = 1.9;
+    this.playerState.z = startZ;
+    this.playerState.yaw = yaw;
+    this.camPos.set(startX + Math.sin(yaw) * 24, 10, startZ + Math.cos(yaw) * 24);
+    this.camTarget.set(startX, 2.5, startZ);
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camTarget);
+    this.camInitialized = true;
+
+    this.audio.playCheckpoint();
+    this.showActivityToast(`Flight departing ${originAp.code} -> ${destAp.code} (${destCity.name})`);
+    this.pushHudSnapshot(true);
   }
 
   private beginEnterBuilding(entrance: BuildingEntranceSpec, targetFloor?: number): void {
@@ -2583,9 +3009,10 @@ export class UrbanWorldEngine {
       z: this.playerState.z,
       yaw: this.playerState.yaw,
     };
+    const openRider = spec.isMotorcycle || vehicle.kind === 'jetski' || vehicle.kind === 'speedboat';
     this.transitionEndPos = {
       x: seat.x,
-      y: vehicle.y + (spec.isMotorcycle ? 0.16 : 0.04),
+      y: vehicle.y + (openRider ? 0.16 : 0.04),
       z: seat.z,
       yaw: vehicle.yaw,
     };
@@ -2607,8 +3034,8 @@ export class UrbanWorldEngine {
       this.playerState.cameraYaw -= deltaYaw;
     }
     this.playerState.cameraPitch = Math.max(
-      -0.12,
-      Math.min(0.88, this.playerState.cameraPitch + deltaPitch),
+      -0.65,
+      Math.min(1.05, this.playerState.cameraPitch + deltaPitch),
     );
   }
 
@@ -2620,6 +3047,7 @@ export class UrbanWorldEngine {
     this.input.sprint = false;
     this.input.jumpHeld = false;
     this.input.jumpJustPressed = false;
+    this.input.diveHeld = false;
     this.input.moveX = 0;
     this.input.moveY = 0;
     this.drivingInput.accelerate = false;
@@ -2627,6 +3055,8 @@ export class UrbanWorldEngine {
     this.drivingInput.steerLeft = false;
     this.drivingInput.steerRight = false;
     this.drivingInput.handbrake = false;
+    this.drivingInput.ascend = false;
+    this.drivingInput.dive = false;
     this.isMouseDragging = false;
   }
 
@@ -2702,10 +3132,12 @@ export class UrbanWorldEngine {
       desiredZ,
       CITY_LAYOUT.colliders,
     );
+    const camWater = getWaterInfoAt(safe.x, safe.z, safe.y, CITY_LAYOUT);
+    const safeY = camWater.inWater ? Math.max(camWater.seabedY + 0.38, safe.y) : safe.y;
 
     const posLambda = safe.clipped ? 24 : 14;
     this.camPos.x = dampValue(this.camPos.x, safe.x, posLambda, dt);
-    this.camPos.y = dampValue(this.camPos.y, safe.y, posLambda, dt);
+    this.camPos.y = dampValue(this.camPos.y, safeY, posLambda, dt);
     this.camPos.z = dampValue(this.camPos.z, safe.z, posLambda, dt);
 
     this.camTarget.x = dampValue(this.camTarget.x, originX, 18, dt);
@@ -2802,14 +3234,18 @@ export class UrbanWorldEngine {
       this.drivingCamOrbitYaw = dampValue(this.drivingCamOrbitYaw, 0, 2.8, dt);
     }
 
+    const isMarine = spec.domain === 'water' || spec.domain === 'submersible';
+    const isSmallRider = spec.isMotorcycle || vehicle.kind === 'jetski';
     const camYaw = vehicle.yaw + this.drivingCamOrbitYaw;
-    const pitch = Math.max(0.14, Math.min(0.68, this.playerState.cameraPitch));
-    const dist = spec.isMotorcycle ? 5.6 : 7.4;
+    const pitch = isMarine
+      ? Math.max(-0.42, Math.min(0.92, this.playerState.cameraPitch))
+      : Math.max(0.14, Math.min(0.68, this.playerState.cameraPitch));
+    const dist = isSmallRider ? 5.6 : vehicle.kind === 'submarine' ? 8.4 : 7.4;
     const horizDist = dist * Math.cos(pitch);
-    const heightOffset = (spec.isMotorcycle ? 1.55 : 2.0) + dist * Math.sin(pitch);
+    const heightOffset = (isSmallRider ? 1.55 : 2.0) + dist * Math.sin(pitch);
 
     const originX = vehicle.x;
-    const originY = vehicle.y + (spec.isMotorcycle ? 1.3 : 1.55);
+    const originY = vehicle.y + (isSmallRider ? 1.3 : 1.55);
     const originZ = vehicle.z;
 
     const desiredX = originX + Math.sin(camYaw) * horizDist;
@@ -2825,10 +3261,12 @@ export class UrbanWorldEngine {
       desiredZ,
       CITY_LAYOUT.colliders,
     );
+    const camWater = getWaterInfoAt(safe.x, safe.z, safe.y, CITY_LAYOUT);
+    const safeY = camWater.inWater ? Math.max(camWater.seabedY + 0.45, safe.y) : safe.y;
 
     const posLambda = safe.clipped ? 26 : 11;
     this.camPos.x = dampValue(this.camPos.x, safe.x, posLambda, dt);
-    this.camPos.y = dampValue(this.camPos.y, safe.y, posLambda, dt);
+    this.camPos.y = dampValue(this.camPos.y, safeY, posLambda, dt);
     this.camPos.z = dampValue(this.camPos.z, safe.z, posLambda, dt);
 
     const shake = this.cameraTrauma * this.cameraTrauma * 0.32;
@@ -3134,6 +3572,8 @@ export class UrbanWorldEngine {
           this.playerState.x,
           this.playerState.z,
           this.vehicles,
+          VEHICLE_INTERACT_RANGE,
+          this.playerState.y,
         );
         const nearKiosk = findNearestQuizKiosk(
           this.playerState.x,
@@ -3141,12 +3581,20 @@ export class UrbanWorldEngine {
           this.playerState.z,
           this.outdoorKiosks,
         );
+        const nearGateJet = this.findNearestOutdoorGateJet();
 
         const prompts: Array<{
           kind: NonNullable<HudSnapshot['interactPrompt']>['kind'];
           label: string;
           dist: number;
         }> = [];
+        if (nearGateJet) {
+          prompts.push({
+            kind: 'board_flight',
+            label: `Board Flight at ${nearGateJet.name} (${nearGateJet.code})`,
+            dist: Math.hypot(nearGateJet.gateJetX - this.playerState.x, nearGateJet.gateJetZ - this.playerState.z) * 0.4,
+          });
+        }
         if (nearRoofDoor) {
           prompts.push({
             kind: 'rooftop_enter',
@@ -3178,7 +3626,7 @@ export class UrbanWorldEngine {
             dist: Math.hypot(nearMission.startX - this.playerState.x, nearMission.startZ - this.playerState.z),
           });
         }
-        if (nearVehicle && Math.abs(this.playerState.y - nearVehicle.y) < 2.2) {
+        if (nearVehicle && Math.abs(this.playerState.y - nearVehicle.y) < 3.6) {
           prompts.push({
             kind: 'vehicle',
             label: `Drive ${nearVehicle.label}`,
@@ -3268,18 +3716,45 @@ export class UrbanWorldEngine {
       this.explorationTracker,
     );
 
+    const activeCity = getCityAt(coordX, coordZ, CITY_LAYOUT);
+
     this.callbacks.onSnapshot({
       phase: this.phase,
       timeOfDay: this.timeOfDay,
       timeLabel: TIME_PRESETS[this.timeOfDay].label,
+      cityId: activeCity.id,
+      cityName: activeCity.name,
       district: district.id,
       districtName: this.activeBlueprint ? this.activeBlueprint.name : district.name,
+      activeFlight: this.flightSequence
+        ? (() => {
+            const prog = Math.min(1, this.flightSequence.timer / this.flightSequence.duration);
+            const phaseLabel =
+              prog < 0.22
+                ? 'Takeoff'
+                : prog > 0.78
+                  ? `Landing · ${this.flightSequence.destAirportCode}`
+                  : `Cruising → ${this.flightSequence.destAirportCode}`;
+            return {
+              fromCityName: this.flightSequence.originCityName,
+              toCityName: this.flightSequence.destCityName,
+              progress: prog,
+              phaseLabel,
+            };
+          })()
+        : null,
       speed: activeVehicle ? Math.abs(activeVehicle.speed) : this.playerState.speed,
       stamina: this.playerState.stamina,
       health: Math.round(this.playerState.health),
       maxHealth: this.playerState.maxHealth,
       isSprinting: this.playerState.isSprinting,
       grounded: this.playerState.grounded,
+      inWater: Boolean(this.playerState.inWater),
+      isUnderwater: Boolean(this.playerState.isUnderwater),
+      waterDepth:
+        activeVehicle && activeVehicle.kind === 'submarine'
+          ? Math.max(0, Math.round((WATER_SURFACE_Y - activeVehicle.y) * 10) / 10)
+          : Math.round((this.playerState.waterDepth ?? 0) * 10) / 10,
       distanceWalked: this.playerState.distanceWalked,
       elapsedTime: this.playerState.elapsedTime,
       playerX: coordX,
@@ -3450,6 +3925,14 @@ export class UrbanWorldEngine {
           this.input.right = true;
           this.drivingInput.steerRight = true;
           break;
+        case 'KeyQ':
+        case 'ControlLeft':
+        case 'ControlRight':
+          if (!e.shiftKey && !e.altKey && !e.metaKey) {
+            this.input.diveHeld = true;
+            this.drivingInput.dive = true;
+          }
+          break;
         case 'ShiftLeft':
         case 'ShiftRight':
           this.input.sprint = true;
@@ -3461,6 +3944,7 @@ export class UrbanWorldEngine {
           }
           this.input.jumpHeld = true;
           this.drivingInput.handbrake = true;
+          this.drivingInput.ascend = true;
           break;
       }
     };
@@ -3487,6 +3971,12 @@ export class UrbanWorldEngine {
           this.input.right = false;
           this.drivingInput.steerRight = false;
           break;
+        case 'KeyQ':
+        case 'ControlLeft':
+        case 'ControlRight':
+          this.input.diveHeld = false;
+          this.drivingInput.dive = false;
+          break;
         case 'ShiftLeft':
         case 'ShiftRight':
           this.input.sprint = false;
@@ -3494,6 +3984,7 @@ export class UrbanWorldEngine {
         case 'Space':
           this.input.jumpHeld = false;
           this.drivingInput.handbrake = false;
+          this.drivingInput.ascend = false;
           break;
       }
     };
@@ -3784,7 +4275,8 @@ export class UrbanWorldEngine {
           this.previewMode === 'quiz' ||
           this.previewMode === 'pin' ||
           this.previewMode === 'session' ||
-          this.previewMode === 'elevator')
+          this.previewMode === 'elevator' ||
+          this.previewMode === 'flight')
       ) {
         // Freeze gameplay physics & timers while modal dialogs are open
         this.audio.updateEngineSound(false, 0, 1);
@@ -4129,8 +4621,8 @@ export class UrbanWorldEngine {
             }
             this.audio.updateFootsteps(
               this.playerState.gaitPhase,
-              this.playerState.grounded && !this.activeLadder,
-              this.playerState.isMoving && !this.activeLadder,
+              this.playerState.grounded && !this.activeLadder && !this.playerState.inWater,
+              this.playerState.isMoving && !this.activeLadder && !this.playerState.inWater,
               this.playerState.isSprinting,
             );
             this.audio.updateEngineSound(false, 0, 1);
@@ -4158,6 +4650,9 @@ export class UrbanWorldEngine {
                 parkourActive: (this.playerState.parkourTimer ?? 0) > 0,
                 turnDeltaYaw,
                 sitting: Boolean(this.activeSitSpot),
+                swimming: Boolean(this.playerState.inWater),
+                underwater: Boolean(this.playerState.isUnderwater),
+                diveVy: this.playerState.vy,
                 elapsedTime: this.playerState.elapsedTime,
               },
               dt,
@@ -4169,7 +4664,7 @@ export class UrbanWorldEngine {
               this.playerState.y,
               this.playerState.z,
               this.playerState.yaw,
-              groundY,
+              this.playerState.inWater ? this.playerState.y : groundY,
               this.playerState.squashY,
             );
             if (this.previewMode === 'customize') {
@@ -4200,7 +4695,11 @@ export class UrbanWorldEngine {
 
             const activeV = this.getActiveVehicle();
             if (activeV) {
-              if (t >= 0.72 && !VEHICLE_SPECS[activeV.kind].isMotorcycle) {
+              const openRider =
+                VEHICLE_SPECS[activeV.kind].isMotorcycle ||
+                activeV.kind === 'jetski' ||
+                activeV.kind === 'speedboat';
+              if (t >= 0.72 && !openRider) {
                 this.playerRig.root.visible = false;
               }
               this.updateDrivingCamera(activeV, dt);
@@ -4209,8 +4708,14 @@ export class UrbanWorldEngine {
             if (t >= 1) {
               this.playerMode = 'driving';
               document.body.dataset.mode = this.playerMode;
-              if (activeV && !VEHICLE_SPECS[activeV.kind].isMotorcycle) {
-                this.playerRig.root.visible = false;
+              if (activeV) {
+                const openRider =
+                  VEHICLE_SPECS[activeV.kind].isMotorcycle ||
+                  activeV.kind === 'jetski' ||
+                  activeV.kind === 'speedboat';
+                if (!openRider) {
+                  this.playerRig.root.visible = false;
+                }
               }
               this.pushHudSnapshot(true);
             }
@@ -4251,11 +4756,37 @@ export class UrbanWorldEngine {
                 this.progression.topSpeedKmh = kmh;
               }
 
-              if (spec.isMotorcycle) {
+              const openRider =
+                spec.isMotorcycle || activeV.kind === 'jetski' || activeV.kind === 'speedboat';
+              if (openRider) {
                 const seat = computeVehicleSeatWorldPos(activeV);
+                stepCharacterAnimRuntime(
+                  this.playerAnimRuntime,
+                  {
+                    speed: Math.abs(activeV.speed),
+                    vy: 0,
+                    grounded: true,
+                    isSprinting: false,
+                    isMoving: Math.abs(activeV.speed) > 0.4,
+                    isDriving: true,
+                    isMotorcycle: activeV.kind === 'motor' || activeV.kind === 'jetski',
+                    onStairs: false,
+                    elapsedTime: this.playerState.elapsedTime,
+                  },
+                  dt,
+                );
+                applyArticulatedPoseToRig(
+                  this.playerRig,
+                  this.playerAnimRuntime.pose,
+                  seat.x,
+                  seat.y - 0.55,
+                  seat.z,
+                  activeV.yaw,
+                  seat.y - 0.55,
+                  1,
+                );
                 this.playerRig.root.visible = true;
-                this.playerRig.root.position.set(seat.x, seat.y - 0.55, seat.z);
-                this.playerRig.root.rotation.set(0, activeV.yaw, activeV.leanAngle);
+                this.playerRig.root.rotation.z = activeV.leanAngle;
               } else {
                 this.playerRig.root.visible = false;
               }
@@ -4294,8 +4825,111 @@ export class UrbanWorldEngine {
               this.playerState.speed = 0;
               this.playerState.vx = 0;
               this.playerState.vz = 0;
-              this.playerState.y = getGroundHeightAt(this.playerState.x, this.playerState.z, CITY_LAYOUT);
+              const exitWater = getWaterInfoAt(
+                this.playerState.x,
+                this.playerState.z,
+                this.transitionEndPos.y,
+                CITY_LAYOUT,
+              );
+              if (exitWater.inWater && exitWater.depth > 1.2) {
+                this.playerState.y = Math.max(
+                  exitWater.seabedY + 0.1,
+                  Math.min(exitWater.waterSurfaceY - 0.85, this.transitionEndPos.y),
+                );
+                this.playerState.inWater = true;
+                this.playerState.grounded = false;
+                this.playerState.waterDepth = Math.max(0, exitWater.waterSurfaceY - this.playerState.y);
+                this.playerState.isUnderwater = this.playerState.y < exitWater.waterSurfaceY - 1.48;
+              } else {
+                this.playerState.y = getGroundHeightAt(this.playerState.x, this.playerState.z, CITY_LAYOUT);
+                this.playerState.inWater = false;
+                this.playerState.isUnderwater = false;
+                this.playerState.waterDepth = 0;
+              }
               document.body.dataset.mode = this.playerMode;
+              this.pushHudSnapshot(true);
+            }
+          } else if (this.playerMode === 'flying' && this.flightSequence) {
+            const fl = this.flightSequence;
+            fl.timer += dt;
+            const rawT = Math.min(1, fl.timer / fl.duration);
+            const easeT = rawT < 0.5 ? 2 * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 2) / 2;
+
+            // Smooth lateral cruise arc + realistic takeoff climb & landing flare
+            const dx = fl.endX - fl.startX;
+            const dz = fl.endZ - fl.startZ;
+            const arcBump = Math.sin(rawT * Math.PI) * 28;
+            const distLen = Math.max(1, Math.hypot(dx, dz));
+            const perpX = -dz / distLen;
+            const perpZ = dx / distLen;
+
+            const px = fl.startX + dx * easeT + perpX * arcBump;
+            const pz = fl.startZ + dz * easeT + perpZ * arcBump;
+
+            let py = 1.9;
+            let pitch = 0;
+            if (rawT < 0.14) {
+              py = 1.9;
+              pitch = 0.04;
+            } else {
+              const airT = (rawT - 0.14) / 0.86;
+              py = 1.9 + Math.pow(Math.sin(airT * Math.PI), 0.72) * 76;
+              pitch = Math.cos(airT * Math.PI) * 0.24;
+            }
+
+            const moveDx = px - this.playerState.x;
+            const moveDz = pz - this.playerState.z;
+            const flyYaw =
+              moveDx * moveDx + moveDz * moveDz > 0.01
+                ? Math.atan2(-moveDx, -moveDz)
+                : Math.atan2(-dx, -dz);
+            const bank = Math.sin(rawT * Math.PI * 2) * 0.22;
+
+            this.playerState.x = px;
+            this.playerState.y = py;
+            this.playerState.z = pz;
+            this.playerState.yaw = flyYaw;
+            this.playerState.speed = 65;
+
+            this.flightJetGroup.visible = true;
+            this.flightJetGroup.position.set(px, py, pz);
+            this.flightJetGroup.rotation.set(pitch, flyYaw, bank, 'YXZ');
+
+            const camDist = 24;
+            const targetCamX = px + Math.sin(flyYaw) * camDist + perpX * 4;
+            const targetCamY = py + 7.2;
+            const targetCamZ = pz + Math.cos(flyYaw) * camDist + perpZ * 4;
+            this.camPos.x = dampValue(this.camPos.x, targetCamX, 8, dt);
+            this.camPos.y = dampValue(this.camPos.y, targetCamY, 8, dt);
+            this.camPos.z = dampValue(this.camPos.z, targetCamZ, 8, dt);
+            this.camTarget.x = dampValue(this.camTarget.x, px, 12, dt);
+            this.camTarget.y = dampValue(this.camTarget.y, py + 1.2, 12, dt);
+            this.camTarget.z = dampValue(this.camTarget.z, pz, 12, dt);
+            this.camera.position.copy(this.camPos);
+            this.camera.lookAt(this.camTarget);
+            this.audio.updateEngineSound(true, 26 + Math.sin(rawT * Math.PI) * 8, 36);
+
+            if (rawT >= 1) {
+              this.flightJetGroup.visible = false;
+              this.flightSequence = null;
+              this.playerMode = 'on_foot';
+              document.body.dataset.mode = this.playerMode;
+              this.playerState.x = fl.arrivalSpawnX;
+              this.playerState.z = fl.arrivalSpawnZ;
+              this.playerState.y = getGroundHeightAt(fl.arrivalSpawnX, fl.arrivalSpawnZ, CITY_LAYOUT);
+              this.playerState.yaw = fl.arrivalSpawnYaw;
+              this.playerState.cameraYaw = fl.arrivalSpawnYaw;
+              this.playerState.cameraPitch = 0.26;
+              this.playerState.speed = 0;
+              this.playerState.vx = 0;
+              this.playerState.vz = 0;
+              this.playerState.grounded = true;
+              this.playerRig.root.visible = true;
+              this.camInitialized = false;
+              this.snapCameraBehindPlayer();
+              this.audio.updateEngineSound(false, 0, 1);
+              this.audio.playCheckpoint();
+              this.showActivityToast(`Landed at ${fl.destAirportName} (${fl.destAirportCode})!`);
               this.pushHudSnapshot(true);
             }
           }
@@ -4448,6 +5082,12 @@ export class UrbanWorldEngine {
             );
             this.sunLight.target.position.set(this.playerState.x, 0, this.playerState.z);
           }
+          this.fillLight.position.set(
+            this.playerState.x - this.sunOffset.x * 0.8,
+            Math.max(24, this.sunOffset.y * 0.55),
+            this.playerState.z - this.sunOffset.z * 0.8,
+          );
+          this.fillLight.target.position.set(this.playerState.x, 1.2, this.playerState.z);
 
           this.pushHudSnapshot(false);
         }
@@ -4505,6 +5145,9 @@ export class UrbanWorldEngine {
         kr.crystal.position.y = baseY + Math.sin(now * 0.003 + i) * 0.055;
         kr.ring.scale.set(pulseScale, 1, pulseScale);
       }
+
+      // Keep sky dome centered around the active player anywhere across all 3 cities
+      this.builtCity.skyDome.position.set(this.playerState.x, 0, this.playerState.z);
 
       // Step & render real-time multiplayer remote classmates
       if (this.phase === 'playing') {

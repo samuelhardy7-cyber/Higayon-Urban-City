@@ -64,6 +64,15 @@ export function createSkyLifeState(): SkyLifeState {
     { id: 'bird_dt_3', centerX: 12, centerZ: -18, baseY: 36, radiusX: 32, radiusZ: 26, angularSpeed: -0.24, phase: 1.8, flapSpeed: 8.4, flapPhase: 2.4, scale: 1.0, color: 0xf1f5f9 },
     { id: 'bird_dt_4', centerX: 0, centerZ: 6, baseY: 28, radiusX: 35, radiusZ: 30, angularSpeed: 0.19, phase: 4.8, flapSpeed: 8.0, flapPhase: 0.2, scale: 1.02, color: 0xf8fafc },
     { id: 'bird_harbor_1', centerX: 84, centerZ: -38, baseY: 24, radiusX: 26, radiusZ: 30, angularSpeed: -0.25, phase: 5.2, flapSpeed: 8.5, flapPhase: 1.1, scale: 1.04, color: 0xf8fafc },
+    // Emerald Bay & Grand Harbor Bridge seagulls
+    { id: 'bird_c2_1', centerX: 298, centerZ: 12, baseY: 23, radiusX: 30, radiusZ: 28, angularSpeed: 0.24, phase: 0.6, flapSpeed: 8.8, flapPhase: 0.4, scale: 1.05, color: 0xf8fafc },
+    { id: 'bird_c2_2', centerX: 312, centerZ: -18, baseY: 32, radiusX: 24, radiusZ: 26, angularSpeed: -0.26, phase: 2.2, flapSpeed: 8.4, flapPhase: 1.5, scale: 1.0, color: 0xf1f5f9 },
+    // Aero Highland high-altitude hawks
+    { id: 'bird_c3_1', centerX: -12, centerZ: -275, baseY: 42, radiusX: 28, radiusZ: 26, angularSpeed: 0.22, phase: 1.5, flapSpeed: 7.4, flapPhase: 0.9, scale: 1.12, color: 0x78350f },
+    { id: 'bird_c3_2', centerX: 16, centerZ: -255, baseY: 28, radiusX: 24, radiusZ: 22, angularSpeed: -0.28, phase: 3.7, flapSpeed: 8.2, flapPhase: 2.1, scale: 1.02, color: 0xf8fafc },
+    // Golden Horizon sunset gulls
+    { id: 'bird_c4_1', centerX: 14, centerZ: 268, baseY: 24, radiusX: 28, radiusZ: 26, angularSpeed: 0.25, phase: 0.9, flapSpeed: 8.6, flapPhase: 0.6, scale: 1.08, color: 0xf8fafc },
+    { id: 'bird_c4_2', centerX: -18, centerZ: 294, baseY: 31, radiusX: 26, radiusZ: 24, angularSpeed: -0.23, phase: 2.8, flapSpeed: 8.1, flapPhase: 1.8, scale: 1.02, color: 0xf1f5f9 },
   ];
 
   const aircraftConfigs: Array<Omit<SkyAircraftActor, 'x' | 'y' | 'z' | 'yaw' | 'bank' | 'pitch' | 'rotorAngle'>> = [
@@ -80,6 +89,18 @@ export function createSkyLifeState(): SkyLifeState {
       scale: 1.15,
     },
     {
+      id: 'sky_jetliner_intercity',
+      kind: 'jetliner',
+      centerX: 145,
+      centerZ: -130,
+      altitude: 124,
+      radiusX: 255,
+      radiusZ: 225,
+      angularSpeed: -0.095,
+      phase: 2.1,
+      scale: 1.25,
+    },
+    {
       id: 'sky_prop_coastal',
       kind: 'prop_plane',
       centerX: 55,
@@ -92,6 +113,18 @@ export function createSkyLifeState(): SkyLifeState {
       scale: 1.0,
     },
     {
+      id: 'sky_prop_emerald',
+      kind: 'prop_plane',
+      centerX: 305,
+      centerZ: -5,
+      altitude: 72,
+      radiusX: 95,
+      radiusZ: 88,
+      angularSpeed: 0.16,
+      phase: 0.9,
+      scale: 1.02,
+    },
+    {
       id: 'sky_heli_patrol',
       kind: 'helicopter',
       centerX: -12,
@@ -102,6 +135,42 @@ export function createSkyLifeState(): SkyLifeState {
       angularSpeed: 0.22,
       phase: 1.3,
       scale: 1.0,
+    },
+    {
+      id: 'sky_heli_highland',
+      kind: 'helicopter',
+      centerX: -14,
+      centerZ: -280,
+      altitude: 66,
+      radiusX: 58,
+      radiusZ: 54,
+      angularSpeed: -0.21,
+      phase: 3.4,
+      scale: 1.0,
+    },
+    {
+      id: 'sky_prop_golden',
+      kind: 'prop_plane',
+      centerX: 8,
+      centerZ: 278,
+      altitude: 70,
+      radiusX: 112,
+      radiusZ: 96,
+      angularSpeed: 0.16,
+      phase: 1.2,
+      scale: 1.04,
+    },
+    {
+      id: 'sky_jetliner_south',
+      kind: 'jetliner',
+      centerX: 120,
+      centerZ: 145,
+      altitude: 118,
+      radiusX: 230,
+      radiusZ: 210,
+      angularSpeed: 0.1,
+      phase: 3.8,
+      scale: 1.22,
     },
   ];
 

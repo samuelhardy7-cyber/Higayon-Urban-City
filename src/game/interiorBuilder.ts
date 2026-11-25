@@ -1117,14 +1117,17 @@ export function buildInteriorScene(
         fg.add(podium, rim, torso, legs, head);
         break;
       }
-      case 'reward_kiosk': {
+      case 'reward_kiosk':
+      case 'boarding_desk': {
         const desk = new THREE.Mesh(tGeo(new THREE.BoxGeometry(p.width, 0.96, p.depth)), priMat);
         desk.position.y = 0.48;
         const trim = new THREE.Mesh(tGeo(new THREE.BoxGeometry(p.width + 0.08, 0.1, p.depth + 0.08)), accMat);
         trim.position.y = 0.96;
+        const screenColor = p.kind === 'boarding_desk' ? 0x0284c7 : 0x0ea5e9;
+        const screenEmissive = p.kind === 'boarding_desk' ? 0x38bdf8 : 0x38bdf8;
         const screen = new THREE.Mesh(
           tGeo(new THREE.BoxGeometry(p.width * 0.72, 1.05, 0.14)),
-          tMat(new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x38bdf8, emissiveIntensity: 0.75, roughness: 0.18 })),
+          tMat(new THREE.MeshStandardMaterial({ color: screenColor, emissive: screenEmissive, emissiveIntensity: 0.78, roughness: 0.18 })),
         );
         screen.position.set(0, 1.68, -p.depth * 0.18);
         const halo = new THREE.Mesh(tGeo(new THREE.BoxGeometry(p.width * 0.76, 0.14, 0.24)), accMat);

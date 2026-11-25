@@ -41,23 +41,38 @@ export function createVehicleRig(
   const wheels: THREE.Object3D[] = [];
 
   const paintMat = trackMat(
-    new THREE.MeshStandardMaterial({
+    new THREE.MeshPhysicalMaterial({
       color: vehicle.isPolice ? 0x162238 : vehicle.color,
-      roughness: 0.28,
-      metalness: 0.45,
+      roughness: 0.22,
+      metalness: 0.52,
+      clearcoat: 0.92,
+      clearcoatRoughness: 0.12,
+      envMapIntensity: 1.25,
     }),
   );
   const policeWhiteMat = trackMat(
-    new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.3, metalness: 0.25 }),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xf1f5f9,
+      roughness: 0.26,
+      metalness: 0.28,
+      clearcoat: 0.78,
+      clearcoatRoughness: 0.16,
+    }),
   );
   const trimMat = trackMat(
     new THREE.MeshStandardMaterial({ color: 0x20262e, roughness: 0.65, metalness: 0.35 }),
   );
   const chromeMat = trackMat(
-    new THREE.MeshStandardMaterial({ color: 0xd0d7e0, roughness: 0.22, metalness: 0.85 }),
+    new THREE.MeshStandardMaterial({ color: 0xd0d7e0, roughness: 0.18, metalness: 0.9 }),
   );
   const glassMat = trackMat(
-    new THREE.MeshStandardMaterial({ color: 0x1e3242, roughness: 0.12, metalness: 0.68 }),
+    new THREE.MeshPhysicalMaterial({
+      color: 0x1e3242,
+      roughness: 0.08,
+      metalness: 0.72,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
+    }),
   );
   const tireMat = trackMat(
     new THREE.MeshStandardMaterial({ color: 0x1a1d21, roughness: 0.88, metalness: 0.05 }),
@@ -189,6 +204,234 @@ export function createVehicleRig(
     const taillight = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.14, 0.08, 0.06)), tailLightMat);
     taillight.position.set(0, 0.68, 0.94);
     chassisGroup.add(taillight);
+  } else if (vehicle.kind === 'jetski') {
+    // Sleek Jet Ski / WaveRunner facing -Z
+    shadowPlane.visible = false;
+    const hull = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.96, 0.34, 2.35)), paintMat);
+    hull.position.set(0, 0.24, 0);
+    hull.castShadow = enableShadows;
+    chassisGroup.add(hull);
+
+    const bowTip = new THREE.Mesh(trackGeo(new THREE.ConeGeometry(0.48, 0.72, 6)), paintMat);
+    bowTip.rotation.x = -Math.PI * 0.5;
+    bowTip.scale.set(1.0, 1.0, 0.55);
+    bowTip.position.set(0, 0.27, -1.48);
+    chassisGroup.add(bowTip);
+
+    const deck = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.04, 0.14, 1.95)), policeWhiteMat);
+    deck.position.set(0, 0.44, 0.08);
+    chassisGroup.add(deck);
+
+    const seat = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.42, 0.2, 0.92)), trimMat);
+    seat.position.set(0, 0.6, 0.28);
+    chassisGroup.add(seat);
+
+    const cowl = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.62, 0.28, 0.72)), paintMat);
+    cowl.position.set(0, 0.56, -0.58);
+    cowl.rotation.x = 0.22;
+    chassisGroup.add(cowl);
+
+    const shield = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.46, 0.16, 0.22)), glassMat);
+    shield.position.set(0, 0.72, -0.56);
+    shield.rotation.x = -0.55;
+    chassisGroup.add(shield);
+
+    const barPivot = new THREE.Group();
+    barPivot.position.set(0, 0.68, -0.4);
+    chassisGroup.add(barPivot);
+    frontSteerPivots.push(barPivot);
+
+    const stem = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.1, 0.22, 0.1)), chromeMat);
+    stem.position.set(0, 0.1, 0);
+    const bar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.72, 0.06, 0.08)), trimMat);
+    bar.position.set(0, 0.2, 0.02);
+    barPivot.add(stem, bar);
+
+    const nozzle = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.11, 0.13, 0.28, 10)), trimMat);
+    nozzle.rotation.x = Math.PI * 0.5;
+    nozzle.position.set(0, 0.22, 1.24);
+    chassisGroup.add(nozzle);
+
+    const impeller = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.18, 0.04, 0.04)), chromeMat);
+    impeller.position.set(0, 0.22, 1.36);
+    chassisGroup.add(impeller);
+    wheels.push(impeller);
+  } else if (vehicle.kind === 'speedboat') {
+    // Luxury Coastal Speedboat facing -Z
+    shadowPlane.visible = false;
+    const keel = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.72, 0.52, 4.1)), policeWhiteMat);
+    keel.position.set(0, 0.28, 0.25);
+    keel.castShadow = enableShadows;
+    chassisGroup.add(keel);
+
+    const sideHull = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.04, 0.48, 3.85)), paintMat);
+    sideHull.position.set(0, 0.42, 0.3);
+    sideHull.castShadow = enableShadows;
+    chassisGroup.add(sideHull);
+
+    const bow = new THREE.Mesh(trackGeo(new THREE.ConeGeometry(1.06, 1.65, 4)), paintMat);
+    bow.rotation.y = Math.PI * 0.25;
+    bow.rotation.x = -Math.PI * 0.5;
+    bow.scale.set(1.0, 1.0, 0.42);
+    bow.position.set(0, 0.42, -2.35);
+    chassisGroup.add(bow);
+
+    const bowDeck = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.78, 0.12, 1.85)), policeWhiteMat);
+    bowDeck.position.set(0, 0.68, -1.0);
+    chassisGroup.add(bowDeck);
+
+    const cockpitFloor = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.7, 0.1, 2.35)), trimMat);
+    cockpitFloor.position.set(0, 0.5, 0.72);
+    chassisGroup.add(cockpitFloor);
+
+    const windshield = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.76, 0.36, 0.58)), glassMat);
+    windshield.position.set(0, 0.84, -0.32);
+    windshield.rotation.x = -0.45;
+    chassisGroup.add(windshield);
+
+    const helm = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.62, 0.38, 0.42)), trimMat);
+    helm.position.set(0.32, 0.68, -0.15);
+    chassisGroup.add(helm);
+
+    const helmWheel = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.14, 0.025, 8, 16)), chromeMat);
+    helmWheel.position.set(0.32, 0.84, 0.06);
+    helmWheel.rotation.x = -0.35;
+    chassisGroup.add(helmWheel);
+
+    for (const sx of [-0.42, 0.42]) {
+      const seat = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.56, 0.36, 0.54)), policeWhiteMat);
+      seat.position.set(sx, 0.68, 0.35);
+      chassisGroup.add(seat);
+    }
+    const bench = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.64, 0.38, 0.58)), policeWhiteMat);
+    bench.position.set(0, 0.7, 1.45);
+    chassisGroup.add(bench);
+
+    // Twin Outboard Motors + Spinning Propellers
+    for (const mx of [-0.46, 0.46]) {
+      const outboardPivot = new THREE.Group();
+      outboardPivot.position.set(mx, 0.42, 2.42);
+      chassisGroup.add(outboardPivot);
+      frontSteerPivots.push(outboardPivot);
+
+      const cowling = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.32, 0.44, 0.42)), trimMat);
+      cowling.position.set(0, 0.24, 0.06);
+      const lowerLeg = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.14, 0.52, 0.2)), trimMat);
+      lowerLeg.position.set(0, -0.16, 0.06);
+      outboardPivot.add(cowling, lowerLeg);
+
+      const prop = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.32, 0.07, 0.05)), chromeMat);
+      prop.position.set(0, -0.34, 0.22);
+      outboardPivot.add(prop);
+      wheels.push(prop);
+    }
+
+    const navLight = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.24, 0.1, 0.1)), headLightMat);
+    navLight.position.set(0, 0.78, -2.0);
+    chassisGroup.add(navLight);
+  } else if (vehicle.kind === 'submarine') {
+    // Deep-Sea Explorer Submarine facing -Z
+    shadowPlane.visible = false;
+    const subGlassMat = trackMat(
+      new THREE.MeshPhysicalMaterial({
+        color: 0xa5f3fc,
+        transparent: true,
+        opacity: 0.42,
+        roughness: 0.08,
+        metalness: 0.15,
+        clearcoat: 1.0,
+      }),
+    );
+    const floodMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: 0xe0f2fe,
+        emissive: 0x7dd3fc,
+        emissiveIntensity: 1.9,
+        roughness: 0.1,
+      }),
+    );
+
+    const pressureHull = new THREE.Mesh(
+      trackGeo(new THREE.CylinderGeometry(0.84, 0.8, 3.3, 18)),
+      paintMat,
+    );
+    pressureHull.rotation.x = Math.PI * 0.5;
+    pressureHull.position.set(0, 0.56, 0.18);
+    pressureHull.castShadow = enableShadows;
+    chassisGroup.add(pressureHull);
+
+    // Clear Acrylic Bow Observatory Dome
+    const bowDome = new THREE.Mesh(
+      trackGeo(new THREE.SphereGeometry(0.84, 20, 16)),
+      subGlassMat,
+    );
+    bowDome.position.set(0, 0.56, -1.48);
+    chassisGroup.add(bowDome);
+
+    const noseRing = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(0.84, 0.08, 10, 22)),
+      trimMat,
+    );
+    noseRing.position.set(0, 0.56, -1.46);
+    chassisGroup.add(noseRing);
+
+    // Side Ballast Pods & Floodlights
+    for (const bx of [-0.94, 0.94]) {
+      const pod = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.22, 0.22, 2.65, 12)),
+        trimMat,
+      );
+      pod.rotation.x = Math.PI * 0.5;
+      pod.position.set(bx, 0.34, 0.1);
+      chassisGroup.add(pod);
+
+      const lamp = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.11, 0.13, 0.16, 12)), floodMat);
+      lamp.rotation.x = Math.PI * 0.5;
+      lamp.position.set(bx, 0.38, -1.25);
+      chassisGroup.add(lamp);
+
+      const fin = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.55, 0.08, 0.42)), paintMat);
+      fin.position.set(bx * 1.15, 0.56, -0.55);
+      chassisGroup.add(fin);
+    }
+
+    // Conning Tower & Periscope
+    const tower = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.62, 0.68, 1.18)), paintMat);
+    tower.position.set(0, 1.56, -0.15);
+    chassisGroup.add(tower);
+
+    const periscope = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.05, 0.06, 0.52, 8)), chromeMat);
+    periscope.position.set(0, 2.08, -0.25);
+    chassisGroup.add(periscope);
+
+    // Tapered Stern + Shroud + Brass Propeller
+    const stern = new THREE.Mesh(
+      trackGeo(new THREE.ConeGeometry(0.8, 1.25, 16)),
+      paintMat,
+    );
+    stern.rotation.x = Math.PI * 0.5;
+    stern.position.set(0, 0.56, 2.42);
+    chassisGroup.add(stern);
+
+    const rudderPivot = new THREE.Group();
+    rudderPivot.position.set(0, 0.56, 2.86);
+    chassisGroup.add(rudderPivot);
+    frontSteerPivots.push(rudderPivot);
+
+    const rudder = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.08, 0.92, 0.46)), trimMat);
+    rudderPivot.add(rudder);
+
+    const shroud = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.38, 0.06, 10, 18)), trimMat);
+    shroud.position.set(0, 0.56, 3.04);
+    chassisGroup.add(shroud);
+
+    const propGroup = new THREE.Group();
+    propGroup.position.set(0, 0.56, 3.05);
+    chassisGroup.add(propGroup);
+    const blade1 = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.64, 0.1, 0.06)), chromeMat);
+    const blade2 = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.1, 0.64, 0.06)), chromeMat);
+    propGroup.add(blade1, blade2);
+    wheels.push(propGroup);
   } else {
     // 4-Wheel Car / SUV / Sports / Pickup
     const isSports = vehicle.kind === 'sports';
@@ -435,17 +678,25 @@ export function animateVehicleRig(
   rig.root.position.set(vehicle.x, vehicle.y, vehicle.z);
   rig.root.rotation.y = vehicle.yaw;
 
-  // Suspension body roll / motorcycle bank
+  // Pitch (submarine climb/dive & boat planing) + Suspension body roll / motorcycle bank
+  rig.chassisGroup.rotation.order = 'YXZ';
+  rig.chassisGroup.rotation.x = vehicle.pitch ?? 0;
   rig.chassisGroup.rotation.z = vehicle.leanAngle;
 
-  // Front steering pivots
+  // Front steering pivots (or rudder / outboard steering)
   for (let i = 0; i < rig.frontSteerPivots.length; i++) {
     rig.frontSteerPivots[i].rotation.y = vehicle.steerAngle;
   }
 
-  // Wheel rolling rotation
+  // Wheel / propeller rolling rotation
+  const isProp =
+    vehicle.kind === 'jetski' || vehicle.kind === 'speedboat' || vehicle.kind === 'submarine';
   for (let i = 0; i < rig.wheels.length; i++) {
-    rig.wheels[i].rotation.x = vehicle.wheelSpin;
+    if (isProp) {
+      rig.wheels[i].rotation.z = vehicle.wheelSpin;
+    } else {
+      rig.wheels[i].rotation.x = vehicle.wheelSpin;
+    }
   }
 
   // Headlights & Taillights

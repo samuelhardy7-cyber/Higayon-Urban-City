@@ -7,11 +7,24 @@ export type DistrictId =
   | 'residential'
   | 'industrial'
   | 'coastal'
-  | 'avenue';
+  | 'avenue'
+  | 'bay_marina'
+  | 'highland_tech'
+  | 'suncrest_bay'
+  | 'airport'
+  | 'bridge';
 
-export type VehicleKind = 'sedan' | 'suv' | 'sports' | 'pickup' | 'motor';
+export type VehicleKind =
+  | 'sedan'
+  | 'suv'
+  | 'sports'
+  | 'pickup'
+  | 'motor'
+  | 'jetski'
+  | 'speedboat'
+  | 'submarine';
 
-export type PlayerControlMode = 'on_foot' | 'entering' | 'driving' | 'exiting';
+export type PlayerControlMode = 'on_foot' | 'entering' | 'driving' | 'exiting' | 'flying';
 
 export type MissionType = 'delivery' | 'race' | 'escape';
 
@@ -43,9 +56,13 @@ export interface BlockZone {
     | 'industrial_factory'
     | 'industrial_port'
     | 'coastal_resort'
-    | 'coastal_restaurants';
+    | 'coastal_restaurants'
+    | 'bay_marina'
+    | 'highland_campus'
+    | 'golden_promenade';
   district: DistrictId;
   label: string;
+  cityId?: CityId;
 }
 
 export type BuildingCategory = 'residential' | 'commercial' | 'business' | 'industrial';
@@ -63,7 +80,8 @@ export type BuildingSubtype =
   | 'corporate'
   | 'workshop'
   | 'warehouse'
-  | 'factory';
+  | 'factory'
+  | 'airport_terminal';
 
 export interface BuildingEntranceSpec {
   id: string;
@@ -99,7 +117,8 @@ export interface BuildingSpec {
     | 'warehouse'
     | 'workshop'
     | 'store'
-    | 'restaurant';
+    | 'restaurant'
+    | 'airport_terminal';
   primaryColor: number;
   accentColor: number;
   hasAwning?: boolean;
@@ -292,6 +311,8 @@ export interface NpcState {
 export interface VehicleSpec {
   kind: VehicleKind;
   label: string;
+  domain?: 'land' | 'water' | 'submersible';
+  draftDepth?: number;
   maxSpeed: number;
   reverseSpeed: number;
   accel: number;
@@ -317,6 +338,8 @@ export interface VehicleState {
   y: number;
   z: number;
   yaw: number;
+  pitch?: number;
+  verticalSpeed?: number;
   speed: number;
   steerAngle: number;
   wheelSpin: number;
@@ -342,6 +365,8 @@ export interface DrivingInputState {
   steerLeft: boolean;
   steerRight: boolean;
   handbrake: boolean;
+  ascend?: boolean;
+  dive?: boolean;
 }
 
 export interface MissionCheckpoint {
@@ -639,7 +664,8 @@ export type InteriorFurnitureKind =
   | 'clothing_rack'
   | 'display_case'
   | 'mannequin_stand'
-  | 'reward_kiosk';
+  | 'reward_kiosk'
+  | 'boarding_desk';
 
 export interface InteriorFurnitureProp {
   id: string;
@@ -687,6 +713,63 @@ export interface InteriorBlueprint {
   accentColor: number;
 }
 
+export type CityId = 'liberty_metro' | 'emerald_bay' | 'aero_highland' | 'golden_horizon';
+
+export interface CityZoneSpec {
+  id: CityId;
+  name: string;
+  shortName: string;
+  tagline: string;
+  centerX: number;
+  centerZ: number;
+  landMinX: number;
+  landMaxX: number;
+  landMinZ: number;
+  landMaxZ: number;
+  roadCentersX: number[];
+  roadCentersZ: number[];
+  accentColor: string;
+}
+
+export interface BridgeSpec {
+  id: string;
+  name: string;
+  axis: 'x' | 'z';
+  start: number;
+  end: number;
+  crossCenter: number;
+  roadWidth: number;
+  sidewalkWidth: number;
+  rampLength: number;
+  deckHeight: number;
+  towerPositions: number[];
+  cableColor: number;
+}
+
+export interface AirportSpec {
+  id: string;
+  cityId: CityId;
+  name: string;
+  code: string;
+  terminalBuildingId: string;
+  centerX: number;
+  centerZ: number;
+  apronMinX: number;
+  apronMaxX: number;
+  apronMinZ: number;
+  apronMaxZ: number;
+  runwayStartX: number;
+  runwayEndX: number;
+  runwayZ: number;
+  gateJetX: number;
+  gateJetZ: number;
+  gateJetYaw: number;
+  arrivalSpawnX: number;
+  arrivalSpawnZ: number;
+  arrivalSpawnYaw: number;
+  connectorRects: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }>;
+}
+
 export interface CityLayout {
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   spawn: { x: number; y: number; z: number; yaw: number };
@@ -694,6 +777,9 @@ export interface CityLayout {
   roadWidth: number;
   sidewalkWidth: number;
   sidewalkHeight: number;
+  cities: CityZoneSpec[];
+  bridges: BridgeSpec[];
+  airports: AirportSpec[];
   blocks: BlockZone[];
   buildings: BuildingSpec[];
   houses: HouseSpec[];
@@ -739,6 +825,9 @@ export interface PlayerState {
   activeLadderId?: string | null;
   parkourTimer?: number;
   activeRooftopId?: string | null;
+  inWater?: boolean;
+  isUnderwater?: boolean;
+  waterDepth?: number;
 }
 
 export interface InputState {
@@ -749,6 +838,7 @@ export interface InputState {
   sprint: boolean;
   jumpHeld: boolean;
   jumpJustPressed: boolean;
+  diveHeld?: boolean;
   moveX: number;
   moveY: number;
 }
@@ -759,6 +849,14 @@ export interface HudSnapshot {
   timeLabel: string;
   district: DistrictId;
   districtName: string;
+  cityId?: CityId;
+  cityName?: string;
+  activeFlight?: {
+    fromCityName: string;
+    toCityName: string;
+    progress: number;
+    phaseLabel: string;
+  } | null;
   speed: number;
   stamina: number;
   health: number;
@@ -795,11 +893,15 @@ export interface HudSnapshot {
       | 'player_social'
       | 'climb_ladder'
       | 'rooftop_enter'
-      | 'rooftop_exit';
+      | 'rooftop_exit'
+      | 'board_flight';
     label: string;
   } | null;
   activeRooftopName?: string | null;
   isClimbingLadder?: boolean;
+  inWater?: boolean;
+  isUnderwater?: boolean;
+  waterDepth?: number;
   photoModeActive?: boolean;
   activeMission: {
     id: string;

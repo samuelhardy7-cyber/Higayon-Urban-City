@@ -4,8 +4,6 @@ import { TRAFFIC_LANE_LOOPS, VEHICLE_SPECS } from './vehicleData';
 import { resolveVehicleWorldCollision } from './vehiclePhysics';
 import { CITY_LAYOUT, getGroundHeightAt } from './worldData';
 
-const ROAD_CENTERS = [-84, -42, 0, 42, 84];
-
 export interface IntersectionSignalState {
   /** 'ns' = North-South green, 'ew' = East-West green, 'all_red' = brief clearance */
   nsGreen: boolean;
@@ -28,27 +26,39 @@ function isApproachingRedIntersection(
   fwdX: number,
   fwdZ: number,
   signal: IntersectionSignalState,
+  layout: CityLayout,
 ): boolean {
   const movingAlongZ = Math.abs(fwdZ) >= Math.abs(fwdX);
   const canProceed = movingAlongZ ? signal.nsGreen : signal.ewGreen;
   if (canProceed) return false;
 
-  // Check if vehicle nose is 5.5m..10.5m ahead of an intersection center along travel direction
-  for (let i = 0; i < ROAD_CENTERS.length; i++) {
-    const rc = ROAD_CENTERS[i];
+  // Check intersections across all cities in the open world
+  for (let c = 0; c < layout.cities.length; c++) {
+    const city = layout.cities[c];
+    if (
+      vx < city.landMinX - 5 ||
+      vx > city.landMaxX + 5 ||
+      vz < city.landMinZ - 5 ||
+      vz > city.landMaxZ + 5
+    ) {
+      continue;
+    }
     if (movingAlongZ) {
-      const distAhead = (rc - vz) * Math.sign(fwdZ);
-      if (distAhead > 5.6 && distAhead < 11.2) {
-        // Check if aligned with a cross road X
-        for (let j = 0; j < ROAD_CENTERS.length; j++) {
-          if (Math.abs(vx - ROAD_CENTERS[j]) < 6.0) return true;
+      for (let i = 0; i < city.roadCentersZ.length; i++) {
+        const distAhead = (city.roadCentersZ[i] - vz) * Math.sign(fwdZ);
+        if (distAhead > 5.6 && distAhead < 11.2) {
+          for (let j = 0; j < city.roadCentersX.length; j++) {
+            if (Math.abs(vx - city.roadCentersX[j]) < 6.0) return true;
+          }
         }
       }
     } else {
-      const distAhead = (rc - vx) * Math.sign(fwdX);
-      if (distAhead > 5.6 && distAhead < 11.2) {
-        for (let j = 0; j < ROAD_CENTERS.length; j++) {
-          if (Math.abs(vz - ROAD_CENTERS[j]) < 6.0) return true;
+      for (let i = 0; i < city.roadCentersX.length; i++) {
+        const distAhead = (city.roadCentersX[i] - vx) * Math.sign(fwdX);
+        if (distAhead > 5.6 && distAhead < 11.2) {
+          for (let j = 0; j < city.roadCentersZ.length; j++) {
+            if (Math.abs(vz - city.roadCentersZ[j]) < 6.0) return true;
+          }
         }
       }
     }
@@ -262,7 +272,7 @@ export function stepTrafficAndPolice(
     const fwdZ = -Math.cos(v.yaw);
 
     // Intersection stop & forward obstacle avoidance
-    const redLight = isApproachingRedIntersection(v.x, v.z, fwdX, fwdZ, signal);
+    const redLight = isApproachingRedIntersection(v.x, v.z, fwdX, fwdZ, signal, layout);
     const obstacleFactor = computeForwardObstacleFactor(
       v,
       fwdX,

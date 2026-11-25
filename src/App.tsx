@@ -3,6 +3,7 @@ import type { User } from 'firebase/auth';
 import { CustomizeModal } from './components/CustomizeModal';
 import { ElevatorModal } from './components/ElevatorModal';
 import { EmoteWheelModal } from './components/EmoteWheelModal';
+import { FlightDepartureModal } from './components/FlightDepartureModal';
 import { GameHud } from './components/GameHud';
 import { GarageModal } from './components/GarageModal';
 import { PauseModal } from './components/PauseModal';
@@ -57,6 +58,7 @@ import type { EmoteKind } from './game/characterAnimator';
 import type {
   AccessoryId,
   CharacterCustomization,
+  CityId,
   DrivingInputState,
   GamePhase,
   GraphicsQuality,
@@ -77,8 +79,10 @@ import {
   fetchPublicQuizState,
   fetchShopCatalog,
   fetchTeacherDatabase,
+  getSavedGuestDisplayName,
   purchaseShopItemOnServer,
   resetTeacherDatabase,
+  saveGuestDisplayName,
   saveTeacherDatabase,
   submitQuizAnswerToServer,
   syncPlayerProgressOnServer,
@@ -93,12 +97,18 @@ const INITIAL_SNAPSHOT: HudSnapshot = {
   timeLabel: 'Siang',
   district: 'avenue',
   districtName: DISTRICT_LABELS.avenue,
+  cityId: 'liberty_metro',
+  cityName: 'Liberty Metro',
+  activeFlight: null,
   speed: 0,
   stamina: 100,
   health: 100,
   maxHealth: 100,
   isSprinting: false,
   grounded: true,
+  inWater: false,
+  isUnderwater: false,
+  waterDepth: 0,
   distanceWalked: 0,
   elapsedTime: 0,
   playerX: 0,
@@ -154,7 +164,8 @@ type ActiveModalKind =
   | 'shop'
   | 'emotes'
   | 'social'
-  | 'photo';
+  | 'photo'
+  | 'flight';
 
 const INITIAL_PHOTO_STATE: PhotoModeState = {
   active: false,
@@ -190,6 +201,14 @@ interface ElevatorPanelState {
   floors: InteriorElevatorFloor[];
 }
 
+interface FlightOriginState {
+  originAirportId: string;
+  originAirportName: string;
+  originAirportCode: string;
+  originCityId: CityId;
+  originCityName: string;
+}
+
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<UrbanWorldEngine | null>(null);
@@ -216,13 +235,16 @@ export default function App() {
   const [authIdToken, setAuthIdToken] = useState<string | null>(null);
   const [authProfile, setAuthProfile] = useState<AuthUserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
+  const authUserRef = useRef<User | null>(null);
+  const customizationRef = useRef<CharacterCustomization>(createInitialProgressionState().customization);
+  const [guestDisplayName, setGuestDisplayName] = useState<string>(() => getSavedGuestDisplayName());
 
   // Memory-only Teacher Mode elevation token & Teacher full question bank
   const [teacherToken, setTeacherToken] = useState<string | null>(null);
   const [teacherTokenExpiresAt, setTeacherTokenExpiresAt] = useState<number>(0);
   const [teacherDatabase, setTeacherDatabase] = useState<QuestionDatabase | null>(null);
 
-  // Live Multiplayer Classroom Session state
+  // Live Multiplayer Classroom / Open World Session state
   const [selfPlayerId, setSelfPlayerId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<MultiplayerSessionSnapshot | null>(null);
   const [connectionState, setConnectionState] = useState<
@@ -242,6 +264,7 @@ export default function App() {
   const [mutedPlayerIds, setMutedPlayerIds] = useState<string[]>([]);
   const [photoState, setPhotoState] = useState<PhotoModeState>(INITIAL_PHOTO_STATE);
   const [photoCapturedUrl, setPhotoCapturedUrl] = useState<string | null>(null);
+  const [flightOrigin, setFlightOrigin] = useState<FlightOriginState | null>(null);
   const mutedPlayerIdSet = useMemo(() => new Set(mutedPlayerIds), [mutedPlayerIds]);
   const lastSyncedBuildingRef = useRef<string | null>(null);
   const lastSyncedFloorRef = useRef<number>(1);
@@ -255,6 +278,9 @@ export default function App() {
     }
     if (next !== 'photo') {
       setPhotoCapturedUrl(null);
+    }
+    if (next !== 'flight') {
+      setFlightOrigin(null);
     }
     setActiveModal(next);
     if (next === 'photo') {
@@ -284,6 +310,7 @@ export default function App() {
             );
             setActiveQuizChallenge(null);
             setElevatorPanelState(null);
+            setFlightOrigin(null);
           }
           setSavedExists(hasSavedGame());
         },
@@ -299,6 +326,10 @@ export default function App() {
         },
         onOpenRewardShop: () => {
           setActiveModal('shop');
+        },
+        onOpenFlightModal: (params) => {
+          setFlightOrigin(params);
+          setActiveModal('flight');
         },
         onElevatorAction: (action) => {
           wsClientRef.current?.sendElevatorAction(action);
@@ -564,7 +595,125 @@ export default function App() {
       .catch(() => {});
   }, [authUser, snapshot.interior]);
 
-  // Real-time player transform/activity sync loop (~14 Hz) while joined in a session
+  useEffect(() => {
+    authUserRef.current = authUser;
+  }, [authUser]);
+
+  useEffect(() => {
+    customizationRef.current = snapshot.progression.customization;
+  }, [snapshot.progression.customization]);
+
+  const connectMultiplayerRoom = useCallback(async (joinCode: string) => {
+    const code = joinCode.trim().toUpperCase() || 'OPEN_WORLD';
+    const user = authUserRef.current;
+    if (code !== 'OPEN_WORLD') {
+      if (!user) {
+        throw new Error('Sign in with Google before joining a classroom session.');
+      }
+      const token = await user.getIdToken();
+      setAuthIdToken(token);
+      await checkJoinSession(token, code);
+    }
+
+    setSessionError(null);
+    wsClientRef.current?.disconnect();
+
+    const client = new MultiplayerWsClient(
+      async () => (authUserRef.current ? authUserRef.current.getIdToken() : null),
+      customizationRef.current,
+      {
+        onJoined: (joinedPlayerId, snap) => {
+          selfPlayerIdRef.current = joinedPlayerId;
+          setSelfPlayerId(joinedPlayerId);
+          setActiveSession(snap);
+          setGroups(snap.groups || []);
+          setChatMessages(snap.recentChat || []);
+          setChallengeState(snap.challengeState || null);
+          setSessionError(null);
+          engineRef.current?.setMultiplayerPlayers(joinedPlayerId, snap.players);
+          snap.elevators?.forEach((el) => engineRef.current?.applyRemoteElevatorState(el));
+        },
+        onSessionState: (snap) => {
+          setActiveSession(snap);
+          if (snap.groups) setGroups(snap.groups);
+          if (snap.challengeState) setChallengeState(snap.challengeState);
+          engineRef.current?.setMultiplayerPlayers(selfPlayerIdRef.current, snap.players);
+          snap.elevators?.forEach((el) => engineRef.current?.applyRemoteElevatorState(el));
+        },
+        onPlayerDelta: (msg) => {
+          if (msg.player.playerId !== selfPlayerIdRef.current) {
+            engineRef.current?.upsertRemotePlayer(msg.player);
+          }
+        },
+        onPlayerLeft: (msg) => {
+          engineRef.current?.removeRemotePlayer(msg.playerId);
+        },
+        onElevatorState: (msg) => {
+          engineRef.current?.applyRemoteElevatorState(msg.elevator);
+        },
+        onChatMessage: (message) => {
+          setChatMessages((prev) => {
+            if (prev.some((m) => m.id === message.id)) return prev;
+            return [...prev, message].slice(-80);
+          });
+        },
+        onEmoteEvent: (evt) => {
+          if (
+            evt.targetPlayerId === selfPlayerIdRef.current &&
+            evt.fromPlayerId !== selfPlayerIdRef.current
+          ) {
+            engineRef.current?.triggerEmote(evt.emote);
+          }
+        },
+        onGroupsState: (nextGroups) => {
+          setGroups(nextGroups);
+        },
+        onChallengeState: (nextState) => {
+          setChallengeState(nextState);
+        },
+        onConnectionChange: (state) => {
+          setConnectionState(state);
+        },
+        onError: (codeErr, message) => {
+          setSessionError(message);
+          if (codeErr === 'SESSION_ENDED' || codeErr === 'DUPLICATE_LOGIN' || codeErr === 'SESSION_FULL') {
+            setActiveSession(null);
+            setGroups([]);
+            setChallengeState(null);
+            engineRef.current?.clearRemotePlayers();
+          }
+        },
+      },
+      () => getSavedGuestDisplayName(),
+    );
+    wsClientRef.current = client;
+    await client.connect(code, customizationRef.current);
+  }, []);
+
+  // Automatically connect players to live shared Open-World City multiplayer on play
+  // and cleanly upgrade/reset socket identity if Google auth state changes
+  useEffect(() => {
+    if (phase !== 'playing') return;
+
+    if (!wsClientRef.current) {
+      void connectMultiplayerRoom('OPEN_WORLD').catch(() => {
+        // Auto-connect retries cleanly when server is reachable
+      });
+      return;
+    }
+
+    if (activeSession && activeSession.session.joinCode === 'OPEN_WORLD') {
+      const signedInUid = authUser?.uid || null;
+      const matchesIdentity = signedInUid
+        ? selfPlayerId === signedInUid
+        : Boolean(selfPlayerId && selfPlayerId.startsWith('guest:'));
+      if (!matchesIdentity) {
+        void connectMultiplayerRoom('OPEN_WORLD').catch(() => {});
+      }
+    }
+  }, [authUser, phase, activeSession, selfPlayerId, connectMultiplayerRoom]);
+
+  // Real-time player transform/activity sync loop (~14 Hz) while connected to Open World or Classroom Session
   useEffect(() => {
     if (!activeSession || connectionState !== 'connected' || phase !== 'playing') {
       return;
@@ -616,86 +765,20 @@ export default function App() {
   // Join / Leave Multiplayer Session
   const handleJoinSession = useCallback(
     async (joinCode: string) => {
-      if (!authUser) {
-        throw new Error('Sign in with Google before joining a classroom session.');
-      }
-      setSessionError(null);
-      const token = await authUser.getIdToken();
-      setAuthIdToken(token);
-      await checkJoinSession(token, joinCode);
-
-      wsClientRef.current?.disconnect();
-      const client = new MultiplayerWsClient(
-        async () => (authUser ? authUser.getIdToken() : null),
-        snapshot.progression.customization,
-        {
-          onJoined: (joinedPlayerId, snap) => {
-            selfPlayerIdRef.current = joinedPlayerId;
-            setSelfPlayerId(joinedPlayerId);
-            setActiveSession(snap);
-            setGroups(snap.groups || []);
-            setChatMessages(snap.recentChat || []);
-            setChallengeState(snap.challengeState || null);
-            setSessionError(null);
-            engineRef.current?.setMultiplayerPlayers(joinedPlayerId, snap.players);
-            snap.elevators?.forEach((el) => engineRef.current?.applyRemoteElevatorState(el));
-          },
-          onSessionState: (snap) => {
-            setActiveSession(snap);
-            if (snap.groups) setGroups(snap.groups);
-            if (snap.challengeState) setChallengeState(snap.challengeState);
-            engineRef.current?.setMultiplayerPlayers(selfPlayerIdRef.current, snap.players);
-            snap.elevators?.forEach((el) => engineRef.current?.applyRemoteElevatorState(el));
-          },
-          onPlayerDelta: (msg) => {
-            if (msg.player.playerId !== selfPlayerIdRef.current) {
-              engineRef.current?.upsertRemotePlayer(msg.player);
-            }
-          },
-          onPlayerLeft: (msg) => {
-            engineRef.current?.removeRemotePlayer(msg.playerId);
-          },
-          onElevatorState: (msg) => {
-            engineRef.current?.applyRemoteElevatorState(msg.elevator);
-          },
-          onChatMessage: (message) => {
-            setChatMessages((prev) => {
-              if (prev.some((m) => m.id === message.id)) return prev;
-              return [...prev, message].slice(-80);
-            });
-          },
-          onEmoteEvent: (evt) => {
-            if (
-              evt.targetPlayerId === selfPlayerIdRef.current &&
-              evt.fromPlayerId !== selfPlayerIdRef.current
-            ) {
-              engineRef.current?.triggerEmote(evt.emote);
-            }
-          },
-          onGroupsState: (nextGroups) => {
-            setGroups(nextGroups);
-          },
-          onChallengeState: (nextState) => {
-            setChallengeState(nextState);
-          },
-          onConnectionChange: (state) => {
-            setConnectionState(state);
-          },
-          onError: (code, message) => {
-            setSessionError(message);
-            if (code === 'SESSION_ENDED' || code === 'DUPLICATE_LOGIN' || code === 'SESSION_FULL') {
-              setActiveSession(null);
-              setGroups([]);
-              setChallengeState(null);
-              engineRef.current?.clearRemotePlayers();
-            }
-          },
-        },
-      );
-      wsClientRef.current = client;
-      await client.connect(joinCode, snapshot.progression.customization);
+      await connectMultiplayerRoom(joinCode);
     },
-    [authUser, snapshot.progression.customization],
+    [connectMultiplayerRoom],
+  );
+
+  const handleUpdateGuestName = useCallback(
+    async (nextName: string) => {
+      const saved = saveGuestDisplayName(nextName);
+      setGuestDisplayName(saved);
+      if (!authUserRef.current && phase === 'playing') {
+        await connectMultiplayerRoom('OPEN_WORLD');
+      }
+    },
+    [connectMultiplayerRoom, phase],
   );
 
   const handleLeaveSession = useCallback(() => {
@@ -710,7 +793,10 @@ export default function App() {
     setSessionError(null);
     setConnectionState('disconnected');
     engineRef.current?.clearRemotePlayers();
-  }, []);
+    if (phase === 'playing') {
+      void connectMultiplayerRoom('OPEN_WORLD').catch(() => {});
+    }
+  }, [connectMultiplayerRoom, phase]);
 
   // Gameplay & Modal Callbacks
   const handleStart = useCallback(() => {
@@ -814,6 +900,15 @@ export default function App() {
     setModal('none');
   }, [setModal]);
 
+  const handleSelectFlightDestination = useCallback(
+    (destCityId: CityId) => {
+      setFlightOrigin(null);
+      setActiveModal('none');
+      engineRef.current?.flyToCity(destCityId);
+    },
+    [],
+  );
+
   const handleMobileMove = useCallback((x: number, y: number) => {
     engineRef.current?.setMobileMove(x, y);
   }, []);
@@ -824,6 +919,10 @@ export default function App() {
 
   const handleMobileJump = useCallback((held: boolean) => {
     engineRef.current?.triggerMobileJump(held);
+  }, []);
+
+  const handleMobileDive = useCallback((held: boolean) => {
+    engineRef.current?.triggerMobileDive(held);
   }, []);
 
   const handleMobileDrivingInput = useCallback(
@@ -1119,6 +1218,7 @@ export default function App() {
           onMobileMove={handleMobileMove}
           onMobileSprint={handleMobileSprint}
           onMobileJump={handleMobileJump}
+          onMobileDive={handleMobileDive}
           onMobileDrivingInput={handleMobileDrivingInput}
         />
       )}
@@ -1242,6 +1342,18 @@ export default function App() {
         />
       )}
 
+      {phase === 'playing' && activeModal === 'flight' && flightOrigin && (
+        <FlightDepartureModal
+          originAirportId={flightOrigin.originAirportId}
+          originAirportName={flightOrigin.originAirportName}
+          originAirportCode={flightOrigin.originAirportCode}
+          originCityId={flightOrigin.originCityId}
+          originCityName={flightOrigin.originCityName}
+          onSelectDestination={handleSelectFlightDestination}
+          onClose={() => setModal('none')}
+        />
+      )}
+
       {activeModal === 'session' && (
         <StudentSessionModal
           authUser={authUser}
@@ -1250,9 +1362,11 @@ export default function App() {
           activeSession={activeSession}
           connectionState={connectionState}
           sessionError={sessionError}
+          guestDisplayName={guestDisplayName}
           explorationObjectives={snapshot.explorationObjectives}
           onSignInGoogle={handleSignInGoogle}
           onSignOut={handleSignOutGoogle}
+          onUpdateGuestName={handleUpdateGuestName}
           onJoinSession={handleJoinSession}
           onLeaveSession={handleLeaveSession}
           onClose={() => setModal('none')}

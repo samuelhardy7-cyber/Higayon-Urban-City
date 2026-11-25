@@ -24,7 +24,7 @@ import type {
 import { getGroundHeightAt, raycastCameraCollision, resolveCircleAABBCollision } from './worldData';
 
 export interface InteriorInteractable {
-  kind: 'building_exit' | 'rooftop_exit' | 'interior_door' | 'elevator' | 'elevator_panel' | 'sit_seat' | 'reward_shop';
+  kind: 'building_exit' | 'rooftop_exit' | 'interior_door' | 'elevator' | 'elevator_panel' | 'sit_seat' | 'reward_shop' | 'board_flight';
   id: string;
   label: string;
   distance: number;
@@ -718,6 +718,25 @@ export function findNearestInteriorInteractable(
           kind: 'reward_shop',
           id: f.id,
           label: 'Open 3D Reward Shop & Studio',
+          distance: dist,
+        };
+      }
+    }
+  }
+
+  // Interactive Flight Boarding Desk inside Airport Terminals
+  if (blueprint.subtype === 'airport_terminal') {
+    for (let i = 0; i < blueprint.furniture.length; i++) {
+      const f = blueprint.furniture[i];
+      if (f.kind !== 'boarding_desk') continue;
+      if (Math.abs(y - f.y) > 1.5) continue;
+      const dist = Math.hypot(x - f.x, z - f.z);
+      if (dist <= 3.1 && dist < bestDist) {
+        bestDist = dist;
+        best = {
+          kind: 'board_flight',
+          id: f.id,
+          label: 'Flight Boarding Desk — Fly to Another City',
           distance: dist,
         };
       }

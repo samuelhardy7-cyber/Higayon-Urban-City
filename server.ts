@@ -11,6 +11,8 @@ import type { CharacterCustomization } from './src/game/types';
 import {
   BOOTSTRAPPED_TEACHER_EMAIL,
   GameBackendStore,
+  PUBLIC_OPEN_WORLD_CODE,
+  PUBLIC_OPEN_WORLD_SESSION_ID,
   PinRateLimiter,
   TeacherTokenManager,
 } from './src/server/securityCore';
@@ -508,7 +510,9 @@ async function startServer() {
     const teacher = await requireVerifiedTeacher(req, res);
     if (!teacher) return;
     res.json({
-      sessions: store.listSessionSnapshots(),
+      sessions: store
+        .listSessionSnapshots()
+        .filter((s) => s.session.id !== PUBLIC_OPEN_WORLD_SESSION_ID),
       studentProgress: store.getStudentProgressSummary(),
     });
   });
@@ -619,19 +623,50 @@ async function startServer() {
       }
 
       if (msg.type === 'auth:join') {
-        const caller = await verifyFirebaseIdToken(msg.token);
-        if (!caller || !caller.emailVerified) {
+        const requestedCode = String(msg.joinCode || PUBLIC_OPEN_WORLD_CODE).trim().toUpperCase();
+        const isPublicOpenWorld = requestedCode === PUBLIC_OPEN_WORLD_CODE;
+
+        const caller = msg.token ? await verifyFirebaseIdToken(msg.token) : null;
+        const verifiedCaller = caller && caller.emailVerified ? caller : null;
+
+        if (!verifiedCaller && !isPublicOpenWorld) {
           sendWs(ws, {
             type: 'session:error',
             code: 'UNAUTHORIZED',
-            message: 'Verified Google login is required to join multiplayer.',
+            message: 'Verified Google login is required to join classroom sessions.',
           });
           ws.close(4001, 'Unauthorized');
           return;
         }
 
-        // Prevent duplicate simultaneous WebSocket session per user UID
-        const previousClient = wsByUid.get(caller.uid);
+        let playerId: string;
+        let displayName: string;
+        let avatarToUse = msg.avatar;
+
+        if (verifiedCaller) {
+          playerId = verifiedCaller.uid;
+          displayName = verifiedCaller.displayName;
+          const serverProf = store.getOrCreatePlayerProfile(verifiedCaller.uid, verifiedCaller.displayName);
+          avatarToUse = serverProf.customization || msg.avatar;
+        } else {
+          // Guest Open-World real-time identity (sandboxed to guest: prefix, never collides with verified UIDs)
+          const rawGuest = String(msg.guestId || '')
+            .replace(/[^a-zA-Z0-9_-]/g, '')
+            .slice(0, 32);
+          const suffix =
+            rawGuest.length >= 6
+              ? rawGuest
+              : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+          playerId = suffix.startsWith('guest_') ? `guest:${suffix}` : `guest:${suffix}`;
+          const cleanName = String(msg.displayName || '')
+            .replace(/[\r\n<>]/g, '')
+            .trim()
+            .slice(0, 22);
+          displayName = cleanName || `Citizen-${suffix.slice(-4).toUpperCase()}`;
+        }
+
+        // Prevent duplicate simultaneous WebSocket session per playerId
+        const previousClient = wsByUid.get(playerId);
         if (previousClient && previousClient.ws !== ws) {
           sendWs(previousClient.ws, {
             type: 'session:error',
@@ -641,12 +676,11 @@ async function startServer() {
           previousClient.ws.close(4009, 'Superseded by newer connection');
         }
 
-        const serverProf = store.getOrCreatePlayerProfile(caller.uid, caller.displayName);
         const outcome = store.joinSession({
-          joinCode: msg.joinCode,
-          playerId: caller.uid,
-          displayName: caller.displayName,
-          avatar: serverProf.customization || msg.avatar,
+          joinCode: requestedCode,
+          playerId,
+          displayName,
+          avatar: avatarToUse,
         });
 
         if (!outcome.ok || !outcome.snapshot) {
@@ -662,11 +696,11 @@ async function startServer() {
         const sessionId = outcome.snapshot.session.id;
         clientCtx = {
           ws,
-          uid: caller.uid,
-          displayName: caller.displayName,
+          uid: playerId,
+          displayName,
           sessionId,
         };
-        wsByUid.set(caller.uid, clientCtx);
+        wsByUid.set(playerId, clientCtx);
         let group = wsBySession.get(sessionId);
         if (!group) {
           group = new Set();
@@ -676,7 +710,7 @@ async function startServer() {
 
         sendWs(ws, {
           type: 'session:joined',
-          selfPlayerId: caller.uid,
+          selfPlayerId: playerId,
           snapshot: outcome.snapshot,
         });
 
@@ -686,7 +720,7 @@ async function startServer() {
             type: 'session:state',
             snapshot: outcome.snapshot,
           },
-          caller.uid,
+          playerId,
         );
         return;
       }

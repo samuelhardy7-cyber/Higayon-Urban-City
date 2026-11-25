@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Moon,
   Pause,
+  Plane,
   Shirt,
   ShoppingBag,
   Sparkles,
@@ -31,6 +32,7 @@ import {
   Users,
   Volume2,
   VolumeX,
+  Waves,
   Wrench,
   Zap,
 } from 'lucide-react';
@@ -65,6 +67,7 @@ interface GameHudProps {
   onMobileMove: (x: number, y: number) => void;
   onMobileSprint: (active: boolean) => void;
   onMobileJump: (held: boolean) => void;
+  onMobileDive?: (held: boolean) => void;
   onMobileDrivingInput: (field: keyof DrivingInputState, held: boolean) => void;
 }
 
@@ -119,6 +122,7 @@ export const GameHud: FC<GameHudProps> = ({
   onMobileMove,
   onMobileSprint,
   onMobileJump,
+  onMobileDive,
   onMobileDrivingInput,
 }) => {
   const [joyOffset, setJoyOffset] = useState({ x: 0, y: 0 });
@@ -218,6 +222,15 @@ export const GameHud: FC<GameHudProps> = ({
   const healthPct = Math.max(0, Math.min(100, Math.round((snapshot.health / snapshot.maxHealth) * 100)));
   const heading = getCardinalLabel(snapshot.cameraYaw);
   const isDriving = snapshot.playerMode === 'driving' || snapshot.playerMode === 'entering';
+  const isFlying = snapshot.playerMode === 'flying';
+  const isSubmarine = isDriving && snapshot.currentVehicleKind === 'submarine';
+  const isWatercraft =
+    isDriving &&
+    (snapshot.currentVehicleKind === 'jetski' ||
+      snapshot.currentVehicleKind === 'speedboat' ||
+      snapshot.currentVehicleKind === 'submarine');
+  const isSwimming = !isDriving && !isFlying && Boolean(snapshot.inWater);
+  const waterDepthMeters = (snapshot.waterDepth ?? 0).toFixed(1);
   const interior = snapshot.interior?.active ? snapshot.interior : null;
   const interiorCategoryLabel = interior
     ? interior.category.charAt(0).toUpperCase() + interior.category.slice(1)
@@ -253,10 +266,16 @@ export const GameHud: FC<GameHudProps> = ({
             style={{ backgroundColor: 'rgba(15, 23, 42, 0.86)' }}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] sm:text-[11px] font-medium text-amber-400 tracking-wide uppercase">
-                {isDriving ? 'Vehicle' : interior ? interiorCategoryLabel : 'District'}
+              <span className="text-[10px] sm:text-[11px] font-medium text-amber-400 tracking-wide uppercase truncate">
+                {isFlying
+                  ? 'In Flight'
+                  : isDriving
+                    ? 'Vehicle'
+                    : interior
+                      ? interiorCategoryLabel
+                      : (snapshot.cityName ?? 'Liberty Metro')}
               </span>
-              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-mono-hud text-slate-300">
+              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-mono-hud text-slate-300 shrink-0">
                 <span data-testid="hud-time-label" className="text-slate-200">
                   {snapshot.timeLabel}
                 </span>
@@ -272,9 +291,11 @@ export const GameHud: FC<GameHudProps> = ({
               data-testid="hud-district"
               className="font-display text-xs sm:text-base font-bold text-white truncate mt-0.5"
             >
-              {isDriving && snapshot.currentVehicleLabel
-                ? snapshot.currentVehicleLabel
-                : snapshot.districtName}
+              {isFlying && snapshot.activeFlight
+                ? `${snapshot.activeFlight.fromCityName} → ${snapshot.activeFlight.toCityName}`
+                : isDriving && snapshot.currentVehicleLabel
+                  ? snapshot.currentVehicleLabel
+                  : snapshot.districtName}
             </div>
 
             {interior && (
@@ -336,6 +357,27 @@ export const GameHud: FC<GameHudProps> = ({
                 className="mt-1 rounded bg-sky-500/20 border border-sky-400/45 px-2 py-0.5 text-[10px] font-mono-hud text-sky-200 font-semibold"
               >
                 Climbing Ladder · W/S Climb · Jump Dismount
+              </div>
+            )}
+
+            {(isSwimming || isSubmarine) && (
+              <div
+                data-testid="hud-depth-badge"
+                className="mt-1 flex items-center justify-between gap-2 rounded bg-cyan-500/20 border border-cyan-400/45 px-2 py-0.5 text-[10px] font-mono-hud text-cyan-200 font-semibold"
+              >
+                <span className="inline-flex items-center gap-1">
+                  <Waves className="w-3 h-3 text-cyan-300 shrink-0" />
+                  <span>
+                    {isSubmarine
+                      ? 'Submarine Sonar'
+                      : snapshot.isUnderwater
+                        ? 'Diving Underwater'
+                        : 'Ocean Surface'}
+                  </span>
+                </span>
+                <span className="tabular-nums text-cyan-100">
+                  Depth {waterDepthMeters}m
+                </span>
               </div>
             )}
 
@@ -411,14 +453,25 @@ export const GameHud: FC<GameHudProps> = ({
               </div>
             </div>
 
-            {/* Speed & Stamina / Vehicle Speedometer */}
-            {isDriving ? (
+            {/* Speed & Stamina / Vehicle Speedometer / Flight Telemetry */}
+            {isFlying ? (
               <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] sm:text-xs text-slate-200 font-mono-hud border-t border-white/10 pt-1.5">
-                <span className="inline-flex items-center gap-1 text-amber-300 whitespace-nowrap shrink-0">
-                  <Car className="w-3.5 h-3.5" />
+                <span className="inline-flex items-center gap-1 text-sky-300 whitespace-nowrap shrink-0">
+                  <Plane className="w-3.5 h-3.5" />
+                  <span data-testid="hud-speed">{speedKmh} km/h</span>
+                </span>
+                <span className="text-[10px] text-sky-300 truncate min-w-0 text-right">
+                  {snapshot.activeFlight?.phaseLabel ?? 'Airborne'}
+                </span>
+              </div>
+            ) : isDriving ? (
+              <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] sm:text-xs text-slate-200 font-mono-hud border-t border-white/10 pt-1.5">
+                <span className={`inline-flex items-center gap-1 whitespace-nowrap shrink-0 ${isWatercraft ? 'text-cyan-300' : 'text-amber-300'}`}>
+                  {isWatercraft ? <Waves className="w-3.5 h-3.5" /> : <Car className="w-3.5 h-3.5" />}
                   <span data-testid="hud-speed">{speedKmh} km/h</span>
                 </span>
                 <span className="text-[10px] text-slate-400 truncate min-w-0 text-right">
+                  {snapshot.cityName ? `${snapshot.cityName} · ` : ''}
                   {snapshot.districtName}
                 </span>
               </div>
@@ -440,42 +493,90 @@ export const GameHud: FC<GameHudProps> = ({
             )}
           </div>
 
-          {/* Active Classroom Session Status Card */}
+          {/* Active Intercity Flight Progress Card */}
+          {snapshot.activeFlight && (
+            <div
+              data-testid="hud-flight-banner"
+              className="rounded-lg border border-sky-400/45 px-2.5 py-2 sm:px-3.5 sm:py-2.5 shadow-md max-w-[215px] sm:max-w-[265px]"
+              style={{ backgroundColor: 'rgba(15, 23, 42, 0.9)' }}
+            >
+              <div className="flex items-center justify-between gap-2 text-[10px] sm:text-[11px]">
+                <span className="inline-flex items-center gap-1 font-semibold uppercase tracking-wide text-sky-300">
+                  <Plane className="w-3 h-3" />
+                  <span>{snapshot.activeFlight.phaseLabel}</span>
+                </span>
+                <span className="font-mono-hud text-slate-200 font-semibold">
+                  {Math.round(snapshot.activeFlight.progress * 100)}%
+                </span>
+              </div>
+              <div className="mt-1 text-xs font-display font-bold text-white truncate">
+                {snapshot.activeFlight.fromCityName} → {snapshot.activeFlight.toCityName}
+              </div>
+              <div className="mt-1.5 h-1.5 w-full rounded-full bg-slate-700 overflow-hidden">
+                <div
+                  className="h-full bg-sky-400 transition-transform duration-100 origin-left"
+                  style={{
+                    transform: `scaleX(${Math.max(0.04, Math.min(1, snapshot.activeFlight.progress))})`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Active Open World or Classroom Session Status Card */}
           {activeSession && (
             <div
               data-testid="hud-active-session-card"
-              className="rounded-lg border border-sky-400/40 px-2.5 py-2 sm:px-3.5 sm:py-2 shadow-md max-w-[215px] sm:max-w-[265px]"
-              style={{ backgroundColor: 'rgba(15, 23, 42, 0.88)' }}
+              className="rounded-lg border border-sky-400/40 px-2.5 py-1.5 sm:px-3 sm:py-2 shadow-md max-w-[215px] sm:max-w-[265px]"
+              style={{ backgroundColor: 'rgba(15, 23, 42, 0.95)' }}
             >
               <div className="flex items-center justify-between gap-2 text-[10px] sm:text-[11px]">
                 <span className="inline-flex items-center gap-1 font-semibold uppercase tracking-wide text-sky-400">
-                  <Users className="w-3 h-3" />
-                  <span>{activeSession.session.joinCode}</span>
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      connectionState === 'connected' ? 'bg-emerald-400' : 'bg-amber-400'
+                    }`}
+                  />
+                  <span>
+                    {activeSession.session.joinCode === 'OPEN_WORLD'
+                      ? 'Open World'
+                      : activeSession.session.joinCode}
+                  </span>
                 </span>
-                <span className="inline-flex items-center gap-1 font-mono-hud text-amber-300 font-semibold">
-                  <Clock className="w-3 h-3" />
-                  <span>{formatTimer(activeSession.session.remainingSeconds)}</span>
-                </span>
+                {activeSession.session.joinCode !== 'OPEN_WORLD' ? (
+                  <span className="inline-flex items-center gap-1 font-mono-hud text-amber-300 font-semibold">
+                    <Clock className="w-3 h-3" />
+                    <span>{formatTimer(activeSession.session.remainingSeconds)}</span>
+                  </span>
+                ) : (
+                  <span className="font-mono-hud text-emerald-300 font-semibold">
+                    {activeSession.onlineCount} Online
+                  </span>
+                )}
               </div>
-              <div className="text-xs font-semibold text-white truncate mt-0.5">
-                {activeSession.session.name}
-              </div>
-              <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] text-slate-300 font-mono-hud">
-                <span>
-                  {activeSession.onlineCount}/{activeSession.session.maxPlayers} online
-                </span>
-                <span
-                  className={
-                    connectionState === 'connected'
-                      ? 'text-emerald-400'
-                      : connectionState === 'reconnecting'
-                        ? 'text-amber-300'
-                        : 'text-rose-400'
-                  }
-                >
-                  {activeSession.session.status === 'paused' ? 'Paused' : connectionState}
-                </span>
-              </div>
+              {activeSession.session.joinCode !== 'OPEN_WORLD' && (
+                <>
+                  <div className="text-xs font-semibold text-white truncate mt-0.5">
+                    {activeSession.session.name}
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] text-slate-300 font-mono-hud">
+                    <span>
+                      {activeSession.onlineCount}/{activeSession.session.maxPlayers} online
+                    </span>
+                    <span
+                      className={
+                        connectionState === 'connected'
+                          ? 'text-emerald-400'
+                          : connectionState === 'reconnecting'
+                            ? 'text-amber-300'
+                            : 'text-rose-400'
+                      }
+                    >
+                      {activeSession.session.status === 'paused' ? 'Paused' : connectionState}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -754,12 +855,18 @@ export const GameHud: FC<GameHudProps> = ({
                   e.currentTarget.blur();
                   onOpenSessionModal();
                 }}
-                title="Join Classroom Session & Account"
+                title="Live Players, Name & Classroom Session"
                 className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg border border-white/15 text-[11px] font-semibold text-white hover:border-sky-400/60 hover:bg-slate-800 transition-colors whitespace-nowrap"
                 style={{ backgroundColor: 'rgba(15, 23, 42, 0.86)' }}
               >
                 <Users className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                <span>{activeSession ? 'Session Roster' : 'Join Session'}</span>
+                <span>
+                  {activeSession
+                    ? activeSession.session.joinCode === 'OPEN_WORLD'
+                      ? `Players (${activeSession.onlineCount})`
+                      : 'Session Roster'
+                    : 'Join Session'}
+                </span>
               </button>
             </div>
           </div>
@@ -833,13 +940,16 @@ export const GameHud: FC<GameHudProps> = ({
               <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 font-mono-hud text-[11px] font-bold">
                 {isDriving && snapshot.interactPrompt.kind === 'mission' ? 'F' : 'E'}
               </span>
+              {snapshot.interactPrompt.kind === 'board_flight' && (
+                <Plane className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+              )}
               <span>{snapshot.interactPrompt.label}</span>
             </button>
           </div>
         )}
 
         {/* Responsive Touch Controls (mobile portrait/landscape & touch tablets) */}
-        {joyMetrics.showTouchControls && (isDriving ? (
+        {joyMetrics.showTouchControls && !isFlying && (isDriving ? (
           /* Mobile Driving Controls: Left/Right Steering | Exit, Brake/Reverse, Gas */
           <div
             data-testid="mobile-driving-controls"
@@ -878,8 +988,43 @@ export const GameHud: FC<GameHudProps> = ({
               </button>
             </div>
 
-            {/* Exit + Brake/Reverse + Accelerate */}
+            {/* Exit + Sub Dive/Surface + Brake/Reverse + Accelerate */}
             <div className="pointer-events-auto flex items-end" style={{ gap: `${joyMetrics.gapPx}px` }}>
+              {isSubmarine && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="mobile-sub-dive"
+                    aria-label="Submerge submarine"
+                    {...makeDrivingHoldHandlers('dive')}
+                    className="rounded-full border-2 border-cyan-400/60 text-cyan-100 flex flex-col items-center justify-center text-[10px] font-semibold active:bg-cyan-500 active:text-slate-950 touch-none"
+                    style={{
+                      backgroundColor: 'rgba(8, 51, 68, 0.85)',
+                      width: `${joyMetrics.actionBtnSizePx}px`,
+                      height: `${joyMetrics.actionBtnSizePx}px`,
+                    }}
+                  >
+                    <ArrowDown className="w-4 h-4" />
+                    <span>Dive</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="mobile-sub-ascend"
+                    aria-label="Surface submarine"
+                    {...makeDrivingHoldHandlers('ascend')}
+                    className="rounded-full border-2 border-sky-400/60 text-sky-100 flex flex-col items-center justify-center text-[10px] font-semibold active:bg-sky-400 active:text-slate-950 touch-none"
+                    style={{
+                      backgroundColor: 'rgba(15, 23, 42, 0.84)',
+                      width: `${joyMetrics.actionBtnSizePx}px`,
+                      height: `${joyMetrics.actionBtnSizePx}px`,
+                    }}
+                  >
+                    <ArrowUp className="w-4 h-4" />
+                    <span>Up</span>
+                  </button>
+                </>
+              )}
+
               <button
                 type="button"
                 data-testid="mobile-exit"
@@ -912,7 +1057,7 @@ export const GameHud: FC<GameHudProps> = ({
                 }}
               >
                 <ArrowDown className="w-5 h-5" />
-                <span>Brake</span>
+                <span>{isWatercraft ? 'Rev' : 'Brake'}</span>
               </button>
 
               <button
@@ -928,7 +1073,7 @@ export const GameHud: FC<GameHudProps> = ({
                 }}
               >
                 <ArrowUp className="w-6 h-6" />
-                <span>Gas</span>
+                <span>{isWatercraft ? 'Thrust' : 'Gas'}</span>
               </button>
             </div>
           </div>
@@ -1016,6 +1161,36 @@ export const GameHud: FC<GameHudProps> = ({
                 <span>Run</span>
               </button>
 
+              {isSwimming && (
+                <button
+                  type="button"
+                  data-testid="mobile-dive"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    onMobileDive?.(true);
+                  }}
+                  onPointerUp={(e) => {
+                    e.stopPropagation();
+                    onMobileDive?.(false);
+                  }}
+                  onPointerCancel={(e) => {
+                    e.stopPropagation();
+                    onMobileDive?.(false);
+                  }}
+                  aria-label="Dive underwater"
+                  className="rounded-full border-2 border-cyan-400/70 text-cyan-100 flex flex-col items-center justify-center text-xs font-semibold active:scale-95 transition-transform touch-none"
+                  style={{
+                    backgroundColor: 'rgba(8, 51, 68, 0.84)',
+                    width: `${joyMetrics.actionBtnSizePx}px`,
+                    height: `${joyMetrics.actionBtnSizePx}px`,
+                  }}
+                >
+                  <ArrowDown className="w-4 h-4" />
+                  <span>Dive</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 data-testid="mobile-jump"
@@ -1031,7 +1206,7 @@ export const GameHud: FC<GameHudProps> = ({
                   e.stopPropagation();
                   onMobileJump(false);
                 }}
-                aria-label="Jump"
+                aria-label={isSwimming ? 'Swim upward' : 'Jump'}
                 className="rounded-full border-2 border-white/30 text-white flex flex-col items-center justify-center text-xs font-semibold active:scale-95 transition-transform"
                 style={{
                   backgroundColor: 'rgba(15, 23, 42, 0.78)',
@@ -1040,7 +1215,7 @@ export const GameHud: FC<GameHudProps> = ({
                 }}
               >
                 <ArrowUp className="w-5 h-5" />
-                <span>Jump</span>
+                <span>{isSwimming ? 'Up' : 'Jump'}</span>
               </button>
             </div>
           </div>
@@ -1161,13 +1336,21 @@ export const GameHud: FC<GameHudProps> = ({
             className="px-4 py-1.5 rounded-lg border border-white/10 text-xs text-slate-200/90 tracking-wide"
             style={{ backgroundColor: 'rgba(15, 23, 42, 0.72)' }}
           >
-            {isDriving
-              ? 'W/S Gas & Reverse · A/D Steer · Space Handbrake · E Exit · V Photo · G Garage · K Shop · Esc Pause'
-              : interior
-                ? 'WASD Move · Space Jump · E Door / Kiosk / Exit · B Emotes · V Photo · K Shop · Esc Pause'
-                : snapshot.pointerLocked
-                  ? 'WASD Move · Shift Sprint · E Interact · B Emotes · V Photo · K Shop · G Garage · T Time'
-                  : 'Click or Drag Camera · WASD Move · E Interact · B Emotes · V Photo · K Shop · G Garage'}
+            {isFlying
+              ? 'Skyline Air Charter · Enjoy the flight view across the bay · Landing automatically at destination airport'
+              : isSubmarine
+                ? 'W/S Thrust · A/D Rudder · Space Surface · Q / Ctrl Dive · E Exit · V Photo · Esc Pause'
+                : isWatercraft
+                  ? 'W/S Throttle · A/D Steer · E Exit · V Photo · G Garage · K Shop · Esc Pause'
+                  : isDriving
+                    ? 'W/S Gas & Reverse · A/D Steer · Space Handbrake · E Exit · V Photo · G Garage · K Shop · Esc Pause'
+                    : isSwimming
+                      ? 'WASD Swim · Shift Fast Swim · Space Surface · Q / Ctrl Dive · E Board Boat · V Photo'
+                      : interior
+                        ? 'WASD Move · Space Jump · E Door / Kiosk / Boarding / Exit · B Emotes · V Photo · K Shop · Esc Pause'
+                        : snapshot.pointerLocked
+                          ? 'WASD Move · Shift Sprint · E Interact · B Emotes · V Photo · K Shop · G Garage · T Time'
+                          : 'Click or Drag Camera · WASD Move · E Interact · B Emotes · V Photo · K Shop · G Garage'}
           </div>
         </div>
       </div>

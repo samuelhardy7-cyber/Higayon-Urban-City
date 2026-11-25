@@ -26,9 +26,11 @@ interface StudentSessionModalProps {
   activeSession: MultiplayerSessionSnapshot | null;
   connectionState: 'connected' | 'reconnecting' | 'disconnected';
   sessionError: string | null;
+  guestDisplayName?: string;
   explorationObjectives?: HudSnapshot['explorationObjectives'];
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
+  onUpdateGuestName?: (name: string) => Promise<void>;
   onJoinSession: (joinCode: string) => Promise<void>;
   onLeaveSession: () => void;
   onClose: () => void;
@@ -48,18 +50,37 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
   activeSession,
   connectionState,
   sessionError,
+  guestDisplayName = '',
   explorationObjectives,
   onSignInGoogle,
   onSignOut,
+  onUpdateGuestName,
   onJoinSession,
   onLeaveSession,
   onClose,
 }) => {
   const [joinCode, setJoinCode] = useState('');
+  const [nameInput, setNameInput] = useState(guestDisplayName);
+  const [savingName, setSavingName] = useState(false);
   const [joining, setJoining] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const combinedError = localError || sessionError;
+  const isOpenWorld = activeSession?.session.joinCode === 'OPEN_WORLD';
+  const onlinePlayers = (activeSession?.players || []).filter(
+    (p) => p.connectionStatus !== 'offline',
+  );
+
+  const handleSaveName = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!onUpdateGuestName) return;
+    setSavingName(true);
+    try {
+      await onUpdateGuestName(nameInput);
+    } finally {
+      setSavingName(false);
+    }
+  };
 
   const handleJoinSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -101,13 +122,13 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-sky-400">
-                Classroom Multiplayer
+                {isOpenWorld ? 'Real-Time Open World' : 'Classroom Multiplayer'}
               </div>
               <h2
                 id="student-session-title"
                 className="font-display text-lg sm:text-xl font-bold text-white"
               >
-                {activeSession ? activeSession.session.name : 'Account & Session'}
+                {activeSession ? activeSession.session.name : 'Multiplayer & Account'}
               </h2>
             </div>
           </div>
@@ -134,30 +155,53 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
         )}
 
         {/* Account Section */}
-        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-3.5">
+        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-3.5 space-y-3">
           {!authUser ? (
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold text-white">Google Account Required</div>
-                <div className="text-[11px] text-slate-400 mt-0.5">
-                  Sign in with Google to join live classroom sessions and save cloud quiz progress.
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold text-white">Playing in Open World City</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    You are live with other players! Sign in with Google to save Knowledge Points or join a private Classroom Session.
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  disabled={authLoading}
+                  data-testid="session-google-signin"
+                  onClick={() =>
+                    void onSignInGoogle().catch((e) =>
+                      setLocalError(e instanceof Error ? e.message : 'Sign-in cancelled.'),
+                    )
+                  }
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-slate-950 font-semibold text-xs hover:bg-amber-400 transition-colors shrink-0 disabled:opacity-60"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>{authLoading ? 'Signing in...' : 'Sign in with Google'}</span>
+                </button>
               </div>
-              <button
-                type="button"
-                disabled={authLoading}
-                data-testid="session-google-signin"
-                onClick={() =>
-                  void onSignInGoogle().catch((e) =>
-                    setLocalError(e instanceof Error ? e.message : 'Sign-in cancelled.'),
-                  )
-                }
-                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-slate-950 font-semibold text-xs hover:bg-amber-400 transition-colors shrink-0 disabled:opacity-60"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>{authLoading ? 'Signing in...' : 'Sign in with Google'}</span>
-              </button>
-            </div>
+              {onUpdateGuestName && (
+                <form onSubmit={handleSaveName} className="flex gap-2 pt-2 border-t border-white/10">
+                  <input
+                    type="text"
+                    maxLength={22}
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    data-testid="guest-name-input"
+                    placeholder="Your Player Name (e.g. Alex)"
+                    className="flex-1 px-3 py-1.5 rounded-lg bg-slate-950 border border-white/15 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingName}
+                    data-testid="guest-name-save"
+                    className="px-3.5 py-1.5 rounded-lg bg-sky-500/20 border border-sky-400/40 text-xs font-semibold text-sky-300 hover:bg-sky-500/30 transition-colors shrink-0"
+                  >
+                    {savingName ? 'Saving...' : 'Set Name'}
+                  </button>
+                </form>
+              )}
+            </>
           ) : (
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -184,12 +228,12 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
           )}
         </div>
 
-        {/* Join Form OR Active Session Roster */}
-        {authUser && !activeSession && (
-          <form onSubmit={handleJoinSubmit} className="space-y-3">
+        {/* Classroom Join Code Form (available whenever signed in and not already inside a private classroom session) */}
+        {authUser && (!activeSession || isOpenWorld) && (
+          <form onSubmit={handleJoinSubmit} className="space-y-2.5 rounded-xl border border-white/10 bg-slate-900/60 p-3.5">
             <div>
               <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                Classroom Join Code
+                Join Private Classroom Session (Optional)
               </label>
               <div className="flex gap-2">
                 <input
@@ -202,27 +246,24 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
                   }}
                   data-testid="session-join-code-input"
                   placeholder="e.g. URB482"
-                  className="flex-1 px-3.5 py-2.5 rounded-lg bg-slate-950 border border-white/15 font-mono-hud text-sm uppercase tracking-widest text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                  className="flex-1 px-3.5 py-2 rounded-lg bg-slate-950 border border-white/15 font-mono-hud text-sm uppercase tracking-widest text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
                 />
                 <button
                   type="submit"
                   disabled={joining}
                   data-testid="session-join-submit"
-                  className="px-5 py-2.5 rounded-lg bg-sky-500 text-slate-950 font-semibold text-xs sm:text-sm hover:bg-sky-400 transition-colors disabled:opacity-60 shrink-0"
+                  className="px-4 py-2 rounded-lg bg-sky-500 text-slate-950 font-semibold text-xs sm:text-sm hover:bg-sky-400 transition-colors disabled:opacity-60 shrink-0"
                 >
-                  {joining ? 'Joining...' : 'Join Session'}
+                  {joining ? 'Joining...' : 'Join Class'}
                 </button>
               </div>
             </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Once connected, classmates in the same session appear live inside the 3D city and on your minimap.
-            </p>
           </form>
         )}
 
-        {authUser && activeSession && (
+        {/* Active Live Roster (for Open World OR Classroom Session) */}
+        {activeSession && (
           <div className="space-y-3.5">
-            {/* Session Summary */}
             <div className="rounded-xl border border-sky-400/35 bg-sky-950/25 p-3.5 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -256,19 +297,19 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
                 <div className="rounded-lg bg-slate-900/75 px-2.5 py-2">
                   <div className="text-[10px] text-slate-400">Status</div>
                   <div className="font-semibold text-white capitalize mt-0.5 inline-flex items-center gap-1">
-                    <Radio className="w-3 h-3 text-sky-400" />
+                    <Radio className="w-3 h-3 text-emerald-400" />
                     {activeSession.session.status}
                   </div>
                 </div>
                 <div className="rounded-lg bg-slate-900/75 px-2.5 py-2">
-                  <div className="text-[10px] text-slate-400">Timer</div>
+                  <div className="text-[10px] text-slate-400">{isOpenWorld ? 'World' : 'Timer'}</div>
                   <div className="font-mono-hud font-semibold text-amber-300 mt-0.5 inline-flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    {formatRemaining(activeSession.session.remainingSeconds)}
+                    {isOpenWorld ? '4 Cities' : formatRemaining(activeSession.session.remainingSeconds)}
                   </div>
                 </div>
                 <div className="rounded-lg bg-slate-900/75 px-2.5 py-2">
-                  <div className="text-[10px] text-slate-400">Classmates</div>
+                  <div className="text-[10px] text-slate-400">Online</div>
                   <div className="font-mono-hud font-semibold text-emerald-300 mt-0.5">
                     {activeSession.onlineCount}/{activeSession.session.maxPlayers}
                   </div>
@@ -277,7 +318,7 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
 
               {activeSession.session.objectives && (
                 <div className="text-xs text-slate-300 border-t border-white/10 pt-2">
-                  <span className="font-semibold text-sky-300">Objective: </span>
+                  <span className="font-semibold text-sky-300">Goal: </span>
                   {activeSession.session.objectives}
                 </div>
               )}
@@ -286,10 +327,10 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
             {/* Connected Roster */}
             <div className="space-y-2">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Connected Players ({activeSession.players.length})
+                Players Online Right Now ({onlinePlayers.length})
               </div>
               <div className="max-h-48 overflow-y-auto space-y-1.5">
-                {activeSession.players.map((p) => (
+                {onlinePlayers.map((p) => (
                   <div
                     key={p.playerId}
                     className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2 text-xs"
@@ -326,14 +367,20 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
             </div>
 
             <div className="flex items-center justify-between gap-2 pt-1">
-              <button
-                type="button"
-                data-testid="session-leave-btn"
-                onClick={onLeaveSession}
-                className="px-4 py-2 rounded-lg border border-rose-400/40 bg-rose-500/15 text-xs font-semibold text-rose-300 hover:bg-rose-500/25 transition-colors"
-              >
-                Leave Session
-              </button>
+              {!isOpenWorld ? (
+                <button
+                  type="button"
+                  data-testid="session-leave-btn"
+                  onClick={onLeaveSession}
+                  className="px-4 py-2 rounded-lg border border-rose-400/40 bg-rose-500/15 text-xs font-semibold text-rose-300 hover:bg-rose-500/25 transition-colors"
+                >
+                  Return to Open World
+                </button>
+              ) : (
+                <span className="text-[11px] text-emerald-300 font-medium">
+                  Real-time sync active
+                </span>
+              )}
               <button
                 type="button"
                 onClick={onClose}

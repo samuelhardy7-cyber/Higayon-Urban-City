@@ -1076,9 +1076,15 @@ function buildCityTower22F(
         { id: `ct_roof_w`, minX: minX - 0.12, maxX: minX + 0.14, minY: y0, maxY: y0 + 1.25, minZ, maxZ, color: railColor, kind: 'railing', blocksCamera: false },
         { id: `ct_roof_e`, minX: maxX - 0.14, maxX: maxX + 0.12, minY: y0, maxY: y0 + 1.25, minZ, maxZ, color: railColor, kind: 'railing', blocksCamera: false },
       );
+      const rooftopTargets: Record<string, NonNullable<InteriorDoorSpec['rooftopTarget']>> = {
+        freedom_tower: { rooftopId: 'roof_freedom_tower', x: -20.8, y: 76.14, z: -27.4, yaw: 0 },
+        c2_emerald_tower: { rooftopId: 'roof_emerald_tower', x: 304.8, y: 44.14, z: -27.4, yaw: 0 },
+        c3_aero_observatory: { rooftopId: 'roof_aero_observatory', x: -21.0, y: 48.14, z: -289.4, yaw: 0 },
+        c4_golden_spire: { rooftopId: 'roof_golden_spire', x: -21.0, y: 46.14, z: 276.6, yaw: 0 },
+      };
       doors.push({
         id: 'ct_rooftop_door',
-        label: 'City Skydeck & Helipad Door',
+        label: `${name} Skydeck Door`,
         hingeX: -7.1,
         y: y0,
         hingeZ: minZ + 0.1,
@@ -1090,13 +1096,7 @@ function buildCityTower22F(
         isExitDoor: false,
         color: 0x0ea5e9,
         style: 'metal',
-        rooftopTarget: {
-          rooftopId: 'roof_freedom_tower',
-          x: -20.8,
-          y: 76.14,
-          z: -27.4,
-          yaw: 0,
-        },
+        rooftopTarget: rooftopTargets[buildingId] || rooftopTargets.freedom_tower,
       });
     } else {
       const wallCol = f % 2 === 0 ? 0xdbe3eb : 0xe2e8f0;
@@ -1232,7 +1232,7 @@ function buildCityTower22F(
   return {
     id: `int_${buildingId}`,
     buildingId,
-    name: 'CITY TOWER',
+    name: name || 'CITY TOWER',
     category: 'business',
     subtype: 'corporate',
     floorsCount: FLOORS,
@@ -1266,7 +1266,12 @@ function buildCorporate(
   name: string,
   accentColor: number,
 ): InteriorBlueprint {
-  if (buildingId === 'freedom_tower') {
+  if (
+    buildingId === 'freedom_tower' ||
+    buildingId === 'c2_emerald_tower' ||
+    buildingId === 'c3_aero_observatory' ||
+    buildingId === 'c4_golden_spire'
+  ) {
     return buildCityTower22F(buildingId, name, accentColor);
   }
   const minX = -8.5;
@@ -1834,6 +1839,172 @@ function buildRewardCenter(
   };
 }
 
+function buildAirportTerminal(
+  buildingId: string,
+  name: string,
+  accentColor: number,
+): InteriorBlueprint {
+  const minX = -13.5;
+  const maxX = 13.5;
+  const minZ = -8.5;
+  const maxZ = 8.5;
+  const h = 5.6;
+  const walls: InteriorWallBox[] = [];
+
+  addPerimeterBox(walls, 'aptm', minX, maxX, minZ, maxZ, 0, h, 0xe2e8f0, 2.4, 2.7, true, true);
+  // Glass security divider on West & East wings (keeps central Boarding Gate concourse wide open)
+  addWallWithDoorGap(walls, 'aptm_sec_w', 'x', -5.6, minZ, 2.2, 0, h, 0x94a3b8, 'glass', -1.8, 2.0, 2.6);
+  addWallWithDoorGap(walls, 'aptm_sec_e', 'x', 5.6, minZ, 2.2, 0, h, 0x94a3b8, 'glass', -1.8, 2.0, 2.6);
+
+  const doors: InteriorDoorSpec[] = [makeExitDoor('exit_door', 2.4, 2.7, maxZ, 'glass', accentColor)];
+  const furniture: InteriorFurnitureProp[] = [
+    // Prominent Flight Boarding Desk in North Concourse (triggers FlightDepartureModal)
+    {
+      id: 'aptm_boarding_desk',
+      kind: 'boarding_desk',
+      x: 0,
+      y: 0,
+      z: -4.8,
+      rotY: 0,
+      width: 4.6,
+      height: 1.15,
+      depth: 1.2,
+      primaryColor: 0x0f172a,
+      accentColor,
+    },
+    // West Check-in & Luggage Counters
+    {
+      id: 'aptm_checkin_1',
+      kind: 'reception_desk',
+      x: -9.6,
+      y: 0,
+      z: -4.2,
+      rotY: 0,
+      width: 3.6,
+      height: 1.08,
+      depth: 0.95,
+      primaryColor: 0x1e293b,
+      accentColor: 0x38bdf8,
+    },
+    {
+      id: 'aptm_checkin_sofa',
+      kind: 'sofa',
+      x: -9.8,
+      y: 0,
+      z: 3.8,
+      rotY: Math.PI,
+      width: 3.0,
+      height: 0.88,
+      depth: 0.95,
+      primaryColor: 0x334155,
+    },
+    // Departure Lounge Seating & Cafe
+    {
+      id: 'aptm_lounge_sofa_w',
+      kind: 'sofa',
+      x: -3.2,
+      y: 0,
+      z: 1.5,
+      rotY: Math.PI * 0.5,
+      width: 2.8,
+      height: 0.88,
+      depth: 0.95,
+      primaryColor: 0x1e3a5f,
+    },
+    {
+      id: 'aptm_lounge_sofa_e',
+      kind: 'sofa',
+      x: 3.2,
+      y: 0,
+      z: 1.5,
+      rotY: -Math.PI * 0.5,
+      width: 2.8,
+      height: 0.88,
+      depth: 0.95,
+      primaryColor: 0x1e3a5f,
+    },
+    {
+      id: 'aptm_cafe_bar',
+      kind: 'espresso_bar',
+      x: 9.8,
+      y: 0,
+      z: -3.6,
+      rotY: -Math.PI * 0.5,
+      width: 3.6,
+      height: 1.08,
+      depth: 1.0,
+      primaryColor: 0x5c3e2a,
+      accentColor: 0xf59e0b,
+    },
+    {
+      id: 'aptm_cafe_table',
+      kind: 'coffee_table',
+      x: 9.6,
+      y: 0,
+      z: 2.2,
+      rotY: 0,
+      width: 1.6,
+      height: 0.72,
+      depth: 1.1,
+      primaryColor: 0x7c5438,
+    },
+    {
+      id: 'aptm_pl_w',
+      kind: 'plant',
+      x: -12.0,
+      y: 0,
+      z: 6.8,
+      rotY: 0,
+      width: 0.75,
+      height: 1.8,
+      depth: 0.75,
+      primaryColor: 0x2f7a44,
+      blocksCamera: false,
+    },
+    {
+      id: 'aptm_pl_e',
+      kind: 'plant',
+      x: 12.0,
+      y: 0,
+      z: 6.8,
+      rotY: 0,
+      width: 0.75,
+      height: 1.8,
+      depth: 0.75,
+      primaryColor: 0x2f7a44,
+      blocksCamera: false,
+    },
+  ];
+
+  return {
+    id: `int_${buildingId}`,
+    buildingId,
+    name,
+    category: 'business',
+    subtype: 'airport_terminal',
+    floorsCount: 1,
+    bounds: { minX, maxX, minZ, maxZ },
+    spawn: { x: 0, y: 0, z: maxZ - 2.2, yaw: 0 },
+    floorSlabs: [
+      { id: 'aptm_fl1', floorNumber: 1, minX, maxX, minZ, maxZ, y: 0, ceilingY: h, surface: 'marble' },
+    ],
+    staircases: [],
+    elevators: [],
+    walls,
+    doors,
+    furniture,
+    lights: [
+      { x: 0, y: 4.8, z: -2.0, color: 0xe0f2fe, intensity: 2.9, distance: 20 },
+      { x: -8.5, y: 4.8, z: 0, color: 0xf8fafc, intensity: 2.4, distance: 16 },
+      { x: 8.5, y: 4.8, z: 0, color: 0xfff0d4, intensity: 2.4, distance: 16 },
+    ],
+    ambientColor: 0xf8fafc,
+    wallColor: 0xe2e8f0,
+    ceilingColor: 0xf8fafc,
+    accentColor,
+  };
+}
+
 export function createInteriorBlueprintForEntrance(
   entrance: BuildingEntranceSpec,
 ): InteriorBlueprint {
@@ -1865,6 +2036,8 @@ export function createInteriorBlueprintForEntrance(
       return buildWarehouse(buildingId, name, accentColor);
     case 'factory':
       return buildFactory(buildingId, name, accentColor);
+    case 'airport_terminal':
+      return buildAirportTerminal(buildingId, name, accentColor);
   }
 }
 
@@ -1882,4 +2055,5 @@ export const ALL_BUILDING_SUBTYPES: BuildingSubtype[] = [
   'workshop',
   'warehouse',
   'factory',
+  'airport_terminal',
 ];
