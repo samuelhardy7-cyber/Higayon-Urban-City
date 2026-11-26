@@ -67,12 +67,17 @@ import {
   suggestNextQuestionId,
   validateQuestionInput,
 } from '../game/questionBank';
+import {
+  getPlacementTargetLabel,
+  getPlacementTargetOptions,
+} from '../game/questionPlacement';
 import type {
   AnswerKey,
   BulkImportPreviewResult,
   ChallengeModeKind,
   FloorPlacement,
   PlacementCategory,
+  PlacementScope,
   QuestionDatabase,
   QuestionDifficulty,
   QuestionDraftInput,
@@ -174,6 +179,8 @@ function createEmptyDraft(db: QuestionDatabase): QuestionDraftInput {
     points: 20,
     buildingCategory: 'commercial',
     floorPlacement: null,
+    placementScope: 'both',
+    targetBuildingId: null,
     questionSetId: firstSet?.id || 'set_city_core',
     status: 'active',
   };
@@ -240,9 +247,12 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
   const [topicSubjectFilter, setTopicSubjectFilter] = useState<string>('all');
   const [topicInputsBySubject, setTopicInputsBySubject] = useState<Record<string, string>>({});
 
-  // Question Sets state (inside Placement & Sets tab)
+  // Question Sets & Placement Search state (inside Placement & Sets tab)
   const [newSetName, setNewSetName] = useState('');
   const [newSetDesc, setNewSetDesc] = useState('');
+  const [placementSearchQuery, setPlacementSearchQuery] = useState('');
+
+  const placementTargets = useMemo(() => getPlacementTargetOptions(), []);
 
   // Bulk Import tab state
   const [importFormat, setImportFormat] = useState<'csv' | 'json'>('csv');
@@ -419,6 +429,8 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
       points: q.points,
       buildingCategory: q.buildingCategory,
       floorPlacement: q.floorPlacement,
+      placementScope: q.placementScope || 'both',
+      targetBuildingId: q.targetBuildingId ?? null,
       questionSetId: q.questionSetId,
       status: q.status || 'active',
     });
@@ -482,6 +494,8 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
       points: Math.round(prepared.points),
       buildingCategory: prepared.buildingCategory,
       floorPlacement: prepared.floorPlacement,
+      placementScope: prepared.placementScope || 'both',
+      targetBuildingId: prepared.targetBuildingId ?? null,
       questionSetId: prepared.questionSetId,
       status: prepared.status || 'active',
       createdAt:
@@ -658,16 +672,26 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
     questionId: string,
     buildingCategory: PlacementCategory,
     floorPlacement: FloorPlacement,
+    placementScope?: PlacementScope,
+    targetBuildingId?: string | null,
   ) => {
     void onUpdateDatabase({
       ...database,
       questions: database.questions.map((q) =>
         q.id === questionId
-          ? { ...q, buildingCategory, floorPlacement, updatedAt: Date.now() }
+          ? {
+              ...q,
+              buildingCategory,
+              floorPlacement,
+              placementScope: placementScope ?? q.placementScope ?? 'both',
+              targetBuildingId:
+                targetBuildingId !== undefined ? targetBuildingId : (q.targetBuildingId ?? null),
+              updatedAt: Date.now(),
+            }
           : q,
       ),
     });
-    showNotice(`Updated placement for ${questionId}.`);
+    showNotice(`Updated 3D placement (letak soal) for ${questionId}.`);
   };
 
   // --- Bulk Import Handlers ---
@@ -1170,8 +1194,15 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
                               +{q.points} pts
                             </span>
                             <span className="text-slate-400">
-                              {q.buildingCategory}
-                              {q.floorPlacement ? ` · Floor ${q.floorPlacement}` : ''}
+                              {getPlacementTargetLabel(q.targetBuildingId) || q.buildingCategory}
+                              {q.placementScope && q.placementScope !== 'both'
+                                ? ` (${q.placementScope})`
+                                : ''}
+                              {q.floorPlacement
+                                ? q.floorPlacement === 22
+                                  ? ' · Rooftop'
+                                  : ` · Floor ${q.floorPlacement}`
+                                : ''}
                             </span>
                             <span
                               className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
@@ -1548,7 +1579,7 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
                 )}
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-300 mb-1">
                     Correct Answer *
@@ -1603,57 +1634,139 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
                     className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/15 text-xs font-mono-hud text-white focus:outline-none focus:border-amber-400"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                    Building Category
-                  </label>
-                  <select
-                    value={draft.buildingCategory}
-                    data-testid="editor-category-select"
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        buildingCategory: e.target.value as PlacementCategory,
-                      })
-                    }
-                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/15 text-xs text-white focus:outline-none focus:border-amber-400"
-                  >
-                    {BUILDING_CATEGORIES.map((bc) => (
-                      <option key={bc.value} value={bc.value}>
-                        {bc.label}
-                      </option>
-                    ))}
-                  </select>
+              {/* Dedicated 3D City Placement Box (Letak Soal — Teacher-Only) */}
+              <div className="rounded-xl border border-amber-400/30 bg-amber-950/15 p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                    <MapPin className="w-3.5 h-3.5" />
+                    <span>3D City Question Placement (Letak Soal)</span>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300 bg-emerald-500/10 border border-emerald-400/30 px-2 py-0.5 rounded">
+                    <ShieldCheck className="w-3 h-3" />
+                    Teacher Only
+                  </span>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                    Floor (Optional)
-                  </label>
-                  <select
-                    value={draft.floorPlacement === null ? '' : String(draft.floorPlacement)}
-                    data-testid="editor-floor-select"
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      const parsed = Number(raw);
-                      setDraft({
-                        ...draft,
-                        floorPlacement:
-                          raw !== '' && Number.isInteger(parsed) && parsed >= 1 && parsed <= 22
-                            ? (parsed as FloorPlacement)
-                            : null,
-                      });
-                    }}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/15 text-xs text-white focus:outline-none focus:border-amber-400"
-                  >
-                    <option value="">Any Floor</option>
-                    {Array.from({ length: 22 }, (_, i) => i + 1).map((fl) => (
-                      <option key={fl} value={String(fl)}>
-                        {fl === 22 ? 'Floor 22 (Rooftop)' : `Floor ${fl}`}
-                      </option>
-                    ))}
-                  </select>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Placement Scope
+                    </label>
+                    <select
+                      value={draft.placementScope || 'both'}
+                      data-testid="editor-scope-select"
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          placementScope: e.target.value as PlacementScope,
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/15 text-xs text-white focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="both">Indoor &amp; Outdoor</option>
+                      <option value="indoor">Indoor Building Only</option>
+                      <option value="outdoor">Outdoor Terminal Only</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Building Category
+                    </label>
+                    <select
+                      value={draft.buildingCategory}
+                      data-testid="editor-category-select"
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          buildingCategory: e.target.value as PlacementCategory,
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/15 text-xs text-white focus:outline-none focus:border-amber-400"
+                    >
+                      {BUILDING_CATEGORIES.map((bc) => (
+                        <option key={bc.value} value={bc.value}>
+                          {bc.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Specific Building / Kiosk
+                    </label>
+                    <select
+                      value={draft.targetBuildingId || ''}
+                      data-testid="editor-target-building-select"
+                      onChange={(e) => {
+                        const val = e.target.value || null;
+                        const isOutdoor = placementTargets.outdoorKiosks.some((k) => k.id === val);
+                        const isBuilding = placementTargets.buildings.some((b) => b.id === val);
+                        const matchedCat =
+                          placementTargets.outdoorKiosks.find((k) => k.id === val)?.category ||
+                          placementTargets.buildings.find((b) => b.id === val)?.category;
+                        setDraft({
+                          ...draft,
+                          targetBuildingId: val,
+                          buildingCategory: matchedCat || draft.buildingCategory,
+                          placementScope: isOutdoor
+                            ? 'outdoor'
+                            : isBuilding
+                              ? 'indoor'
+                              : draft.placementScope || 'both',
+                        });
+                      }}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/15 text-xs text-white focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="">Any Matching Building / Kiosk</option>
+                      <optgroup label="Outdoor Study Terminals">
+                        {placementTargets.outdoorKiosks.map((k) => (
+                          <option key={k.id} value={k.id}>
+                            {k.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Specific City Buildings">
+                        {placementTargets.buildings.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.label} ({b.category})
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Floor (Optional)
+                    </label>
+                    <select
+                      value={draft.floorPlacement === null ? '' : String(draft.floorPlacement)}
+                      data-testid="editor-floor-select"
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const parsed = Number(raw);
+                        setDraft({
+                          ...draft,
+                          floorPlacement:
+                            raw !== '' && Number.isInteger(parsed) && parsed >= 1 && parsed <= 22
+                              ? (parsed as FloorPlacement)
+                              : null,
+                        });
+                      }}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/15 text-xs text-white focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="">Any Floor</option>
+                      {Array.from({ length: 22 }, (_, i) => i + 1).map((fl) => (
+                        <option key={fl} value={String(fl)}>
+                          {fl === 22 ? 'Floor 22 (Rooftop)' : `Floor ${fl}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -2144,13 +2257,19 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
             <div className="space-y-6">
               {/* Building Category Overview & Reassignment */}
               <div className="space-y-3">
-                <div>
-                  <h3 className="font-display text-base font-bold text-white">
-                    3D Building &amp; Floor Placement Settings
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Control which building categories and floors host each educational question terminal across the city.
-                  </p>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h3 className="font-display text-base font-bold text-white">
+                      3D Building &amp; Floor Placement Settings (Letak Soal)
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Atur letak setiap soal di gedung tertentu, terminal outdoor, kategori distrik, dan lantai secara real-time.
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-400/35 bg-emerald-500/10 text-[11px] font-semibold text-emerald-300">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Teacher-Only Protected
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-2.5">
@@ -2181,67 +2300,164 @@ export const TeacherDashboardModal: FC<TeacherDashboardModalProps> = ({
                 </div>
 
                 <div className="rounded-xl border border-white/10 bg-slate-900/75 overflow-hidden">
-                  <div className="px-4 py-2.5 border-b border-white/10 text-xs font-semibold text-slate-200 flex items-center justify-between">
+                  <div className="px-4 py-2.5 border-b border-white/10 text-xs font-semibold text-slate-200 flex flex-wrap items-center justify-between gap-2">
                     <span>Quick Placement Assignment ({database.questions.length} Questions)</span>
-                    <span className="text-[11px] text-slate-400">
-                      Updates apply immediately in 3D world
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={placementSearchQuery}
+                        onChange={(e) => setPlacementSearchQuery(e.target.value)}
+                        data-testid="placement-search-input"
+                        placeholder="Filter question ID or text..."
+                        className="px-2.5 py-1 rounded-lg bg-slate-950 border border-white/15 text-[11px] font-normal text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                      />
+                      <span className="text-[11px] text-slate-400 hidden sm:inline">
+                        Updates apply immediately in 3D world
+                      </span>
+                    </div>
                   </div>
-                  <div className="max-h-72 overflow-y-auto divide-y divide-white/5">
-                    {database.questions.map((q) => (
-                      <div
-                        key={q.id}
-                        className="px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                      >
-                        <div className="min-w-0">
-                          <span className="font-mono-hud text-amber-300 mr-2">{q.id}</span>
-                          <span className="text-white font-medium">{q.questionText}</span>
+                  <div className="max-h-80 overflow-y-auto divide-y divide-white/5">
+                    {database.questions
+                      .filter((q) => {
+                        const needle = placementSearchQuery.trim().toLowerCase();
+                        if (!needle) return true;
+                        return (
+                          q.id.toLowerCase().includes(needle) ||
+                          q.questionText.toLowerCase().includes(needle) ||
+                          (getPlacementTargetLabel(q.targetBuildingId) || '')
+                            .toLowerCase()
+                            .includes(needle)
+                        );
+                      })
+                      .map((q) => (
+                        <div
+                          key={q.id}
+                          data-testid={`placement-row-${q.id}`}
+                          className="px-4 py-2.5 flex flex-col lg:flex-row lg:items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <span className="font-mono-hud text-amber-300 mr-2">{q.id}</span>
+                            <span className="text-white font-medium">{q.questionText}</span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                            <select
+                              value={q.placementScope || 'both'}
+                              data-testid={`placement-scope-${q.id}`}
+                              onChange={(e) =>
+                                handleReassignQuestionPlacement(
+                                  q.id,
+                                  q.buildingCategory,
+                                  q.floorPlacement,
+                                  e.target.value as PlacementScope,
+                                  q.targetBuildingId ?? null,
+                                )
+                              }
+                              aria-label={`Scope for ${q.id}`}
+                              className="px-2 py-1 rounded bg-slate-950 border border-white/15 text-[11px] text-sky-200"
+                            >
+                              <option value="both">Indoor &amp; Outdoor</option>
+                              <option value="indoor">Indoor Only</option>
+                              <option value="outdoor">Outdoor Only</option>
+                            </select>
+                            <select
+                              value={q.buildingCategory}
+                              data-testid={`placement-category-${q.id}`}
+                              onChange={(e) =>
+                                handleReassignQuestionPlacement(
+                                  q.id,
+                                  e.target.value as PlacementCategory,
+                                  q.floorPlacement,
+                                  q.placementScope || 'both',
+                                  q.targetBuildingId ?? null,
+                                )
+                              }
+                              aria-label={`Category for ${q.id}`}
+                              className="px-2 py-1 rounded bg-slate-950 border border-white/15 text-[11px] text-white"
+                            >
+                              {BUILDING_CATEGORIES.map((bc) => (
+                                <option key={bc.value} value={bc.value}>
+                                  {bc.value}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={q.targetBuildingId || ''}
+                              data-testid={`placement-target-${q.id}`}
+                              onChange={(e) => {
+                                const val = e.target.value || null;
+                                const isOutdoor = placementTargets.outdoorKiosks.some(
+                                  (k) => k.id === val,
+                                );
+                                const isBuilding = placementTargets.buildings.some(
+                                  (b) => b.id === val,
+                                );
+                                const matchedCat =
+                                  placementTargets.outdoorKiosks.find((k) => k.id === val)
+                                    ?.category ||
+                                  placementTargets.buildings.find((b) => b.id === val)?.category;
+                                handleReassignQuestionPlacement(
+                                  q.id,
+                                  matchedCat || q.buildingCategory,
+                                  q.floorPlacement,
+                                  isOutdoor
+                                    ? 'outdoor'
+                                    : isBuilding
+                                      ? 'indoor'
+                                      : q.placementScope || 'both',
+                                  val,
+                                );
+                              }}
+                              aria-label={`Specific building or kiosk for ${q.id}`}
+                              className="px-2 py-1 rounded bg-slate-950 border border-white/15 text-[11px] text-amber-200 max-w-[190px]"
+                            >
+                              <option value="">Any Matching Location</option>
+                              <optgroup label="Outdoor Study Terminals">
+                                {placementTargets.outdoorKiosks.map((k) => (
+                                  <option key={k.id} value={k.id}>
+                                    {k.label}
+                                  </option>
+                                ))}
+                              </optgroup>
+                              <optgroup label="Specific City Buildings">
+                                {placementTargets.buildings.map((b) => (
+                                  <option key={b.id} value={b.id}>
+                                    {b.label}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            </select>
+                            <select
+                              value={q.floorPlacement === null ? '' : String(q.floorPlacement)}
+                              data-testid={`placement-floor-${q.id}`}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const parsed = Number(raw);
+                                handleReassignQuestionPlacement(
+                                  q.id,
+                                  q.buildingCategory,
+                                  raw !== '' &&
+                                    Number.isInteger(parsed) &&
+                                    parsed >= 1 &&
+                                    parsed <= 22
+                                    ? (parsed as FloorPlacement)
+                                    : null,
+                                  q.placementScope || 'both',
+                                  q.targetBuildingId ?? null,
+                                );
+                              }}
+                              aria-label={`Floor for ${q.id}`}
+                              className="px-2 py-1 rounded bg-slate-950 border border-white/15 text-[11px] text-white"
+                            >
+                              <option value="">Any Floor</option>
+                              {Array.from({ length: 22 }, (_, i) => i + 1).map((fl) => (
+                                <option key={fl} value={String(fl)}>
+                                  {fl === 22 ? 'Floor 22 (Rooftop)' : `Floor ${fl}`}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <select
-                            value={q.buildingCategory}
-                            onChange={(e) =>
-                              handleReassignQuestionPlacement(
-                                q.id,
-                                e.target.value as PlacementCategory,
-                                q.floorPlacement,
-                              )
-                            }
-                            aria-label={`Category for ${q.id}`}
-                            className="px-2 py-1 rounded bg-slate-950 border border-white/15 text-[11px] text-white"
-                          >
-                            {BUILDING_CATEGORIES.map((bc) => (
-                              <option key={bc.value} value={bc.value}>
-                                {bc.value}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            value={q.floorPlacement === null ? '' : String(q.floorPlacement)}
-                            onChange={(e) => {
-                              const raw = e.target.value;
-                              const parsed = Number(raw);
-                              handleReassignQuestionPlacement(
-                                q.id,
-                                q.buildingCategory,
-                                raw !== '' && Number.isInteger(parsed) && parsed >= 1 && parsed <= 22
-                                  ? (parsed as FloorPlacement)
-                                  : null,
-                              );
-                            }}
-                            aria-label={`Floor for ${q.id}`}
-                            className="px-2 py-1 rounded bg-slate-950 border border-white/15 text-[11px] text-white"
-                          >
-                            <option value="">Any Floor</option>
-                            {Array.from({ length: 22 }, (_, i) => i + 1).map((fl) => (
-                              <option key={fl} value={String(fl)}>
-                                {fl === 22 ? 'Floor 22 (Rooftop)' : `Floor ${fl}`}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
                   </div>
                 </div>
               </div>

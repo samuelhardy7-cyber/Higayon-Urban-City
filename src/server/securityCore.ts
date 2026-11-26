@@ -36,6 +36,8 @@ import {
 } from '../game/questionBank';
 import type {
   AnswerKey,
+  PlacementCategory,
+  PlacementScope,
   PlayerQuizProgress,
   PlayerSubmissionOutcome,
   PublicQuestionDatabase,
@@ -63,6 +65,21 @@ import type { CharacterCustomization, InteriorElevatorFloor, VehicleKind } from 
 export const BOOTSTRAPPED_TEACHER_EMAIL = 'samuelhardy7@gmail.com';
 export const PUBLIC_OPEN_WORLD_CODE = 'OPEN_WORLD';
 export const PUBLIC_OPEN_WORLD_SESSION_ID = 'sess_open_world';
+
+export function resolveCallerAuthorization(
+  caller: { email: string; emailVerified: boolean },
+  store: Pick<GameBackendStore, 'isTeacherEmail'>,
+): { role: 'student' | 'teacher'; isBootstrappedTeacher: boolean; canAccessTeacherTools: boolean } {
+  const normalizedEmail = (caller.email || '').trim().toLowerCase();
+  const isVerifiedTeacher = Boolean(caller.emailVerified && store.isTeacherEmail(normalizedEmail));
+  return {
+    role: isVerifiedTeacher ? 'teacher' : 'student',
+    isBootstrappedTeacher: Boolean(
+      caller.emailVerified && normalizedEmail === BOOTSTRAPPED_TEACHER_EMAIL,
+    ),
+    canAccessTeacherTools: isVerifiedTeacher,
+  };
+}
 
 export function validatePinFormat(pin: string): string | null {
   if (typeof pin !== 'string') return 'PIN must be a string.';
@@ -650,10 +667,37 @@ export class GameBackendStore {
   }
 
   public replaceQuestionDatabase(nextDb: QuestionDatabase): QuestionDatabase {
-    const normalizedQuestions = nextDb.questions.map((q) => ({
-      ...q,
-      status: q.status || 'active',
-    }));
+    const normalizedQuestions = nextDb.questions.map((q) => {
+      const safeScope: PlacementScope =
+        q.placementScope === 'indoor' || q.placementScope === 'outdoor'
+          ? q.placementScope
+          : 'both';
+      const rawTarget = typeof q.targetBuildingId === 'string' ? q.targetBuildingId.trim() : '';
+      const safeTargetId =
+        rawTarget && /^[a-zA-Z0-9_-]{1,64}$/.test(rawTarget) ? rawTarget : null;
+      const safeFloor =
+        typeof q.floorPlacement === 'number' &&
+        Number.isInteger(q.floorPlacement) &&
+        q.floorPlacement >= 1 &&
+        q.floorPlacement <= 22
+          ? q.floorPlacement
+          : null;
+      const safeCat: PlacementCategory =
+        q.buildingCategory === 'residential' ||
+        q.buildingCategory === 'commercial' ||
+        q.buildingCategory === 'business' ||
+        q.buildingCategory === 'industrial'
+          ? q.buildingCategory
+          : 'any';
+      return {
+        ...q,
+        buildingCategory: safeCat,
+        floorPlacement: safeFloor,
+        placementScope: safeScope,
+        targetBuildingId: safeTargetId,
+        status: q.status === 'inactive' ? ('inactive' as const) : ('active' as const),
+      };
+    });
     this.questionDb = {
       ...nextDb,
       questions: normalizedQuestions,

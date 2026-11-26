@@ -8,6 +8,8 @@ export type AnswerKey = 'A' | 'B' | 'C' | 'D';
 
 export type PlacementCategory = BuildingCategory | 'any';
 
+export type PlacementScope = 'both' | 'indoor' | 'outdoor';
+
 export type FloorPlacement = number | null;
 
 export type CollectibleVisualStyle = 'terminal' | 'book' | 'tablet' | 'card' | 'crystal' | 'artifact';
@@ -44,6 +46,8 @@ export interface QuestionRecord {
   points: number;
   buildingCategory: PlacementCategory;
   floorPlacement: FloorPlacement;
+  placementScope?: PlacementScope;
+  targetBuildingId?: string | null;
   questionSetId: string;
   status?: 'active' | 'inactive';
   createdAt: number;
@@ -165,6 +169,8 @@ export interface PlayerQuestionChallenge {
   points: number;
   buildingCategory: PlacementCategory;
   floorPlacement: FloorPlacement;
+  placementScope?: PlacementScope;
+  targetBuildingId?: string | null;
   questionSetName: string;
   allowRetry: boolean;
   alreadyCompleted: boolean;
@@ -197,6 +203,8 @@ export interface QuestionDraftInput {
   points: number;
   buildingCategory: PlacementCategory;
   floorPlacement: FloorPlacement;
+  placementScope?: PlacementScope;
+  targetBuildingId?: string | null;
   questionSetId: string;
   status?: 'active' | 'inactive';
 }

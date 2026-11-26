@@ -1908,27 +1908,85 @@ export function animateNpcRig(rig: NpcRig, npc: NpcState, elapsed: number): void
   rig.root.position.set(npc.x, npc.y, npc.z);
   rig.root.rotation.y = npc.yaw;
 
-  if (npc.isPaused) {
+  const activity = npc.activity ?? (npc.isPaused ? 'idle_look' : 'walk');
+  const seed = npc.loopIndex * 1.3 + npc.variant * 0.7;
+
+  if (activity === 'sitting') {
+    rig.hips.position.y = npc.seatY ?? 0.50;
+    rig.hips.rotation.z = Math.sin(elapsed * 0.8 + seed) * 0.015;
+    rig.torso.rotation.set(0.05, Math.sin(elapsed * 0.7 + seed) * 0.05, 0);
+    rig.head.rotation.y = Math.sin(elapsed * 0.95 + seed) * 0.24;
+    rig.head.rotation.x = Math.sin(elapsed * 1.4 + seed) * 0.04;
+    rig.leftLeg.rotation.x = 1.44;
+    rig.rightLeg.rotation.x = 1.44;
+    rig.leftKnee.rotation.x = -1.40;
+    rig.rightKnee.rotation.x = -1.40;
+    rig.leftArm.rotation.x = 0.34 + Math.sin(elapsed * 1.1 + seed) * 0.04;
+    rig.rightArm.rotation.x = 0.36 + Math.cos(elapsed * 1.1 + seed) * 0.04;
+    rig.leftElbow.rotation.x = 0.68;
+    rig.rightElbow.rotation.x = 0.72;
+    return;
+  }
+
+  if (activity === 'working' && npc.isPaused) {
+    rig.leftLeg.rotation.x *= 0.82;
+    rig.rightLeg.rotation.x *= 0.82;
+    rig.leftKnee.rotation.x = -0.06;
+    rig.rightKnee.rotation.x = -0.06;
+    rig.hips.position.y = 0.89 + Math.sin(elapsed * 2.2 + seed) * 0.008;
+    rig.hips.rotation.z = Math.sin(elapsed * 1.2 + seed) * 0.018;
+    rig.torso.rotation.set(-0.06, Math.sin(elapsed * 1.0 + seed) * 0.07, 0);
+    rig.head.rotation.y = Math.sin(elapsed * 1.3 + seed) * 0.22;
+    rig.head.rotation.x = -0.08 + Math.sin(elapsed * 2.0 + seed) * 0.04;
+    rig.leftArm.rotation.x = 0.36 + Math.sin(elapsed * 4.4 + seed) * 0.09;
+    rig.rightArm.rotation.x = 0.38 + Math.cos(elapsed * 4.4 + seed) * 0.09;
+    rig.leftElbow.rotation.x = 0.88 + Math.sin(elapsed * 5.2 + seed) * 0.14;
+    rig.rightElbow.rotation.x = 0.88 + Math.cos(elapsed * 5.2 + seed) * 0.14;
+    return;
+  }
+
+  if (activity === 'chatting' && npc.isPaused) {
+    rig.leftLeg.rotation.x *= 0.82;
+    rig.rightLeg.rotation.x *= 0.82;
+    rig.leftKnee.rotation.x = -0.05;
+    rig.rightKnee.rotation.x = -0.05;
+    rig.hips.position.y = 0.89 + Math.sin(elapsed * 2.4 + seed) * 0.01;
+    rig.hips.rotation.z = Math.sin(elapsed * 1.6 + seed) * 0.025;
+    rig.torso.rotation.set(0.0, Math.sin(elapsed * 1.8 + seed) * 0.1, 0);
+    rig.head.rotation.y = Math.sin(elapsed * 1.7 + seed) * 0.26;
+    rig.head.rotation.x = Math.sin(elapsed * 3.2 + seed) * 0.08;
+    rig.leftArm.rotation.x = 0.22 + Math.max(0, Math.sin(elapsed * 2.6 + seed)) * 0.22;
+    rig.rightArm.rotation.x = 0.42 + Math.sin(elapsed * 3.4 + seed) * 0.24;
+    rig.leftElbow.rotation.x = 0.48 + Math.sin(elapsed * 2.6 + seed) * 0.2;
+    rig.rightElbow.rotation.x = 0.78 + Math.cos(elapsed * 3.4 + seed) * 0.26;
+    return;
+  }
+
+  if (npc.isPaused || activity === 'idle_look' || activity === 'browse') {
+    const isBrowsing = activity === 'browse' && npc.isPaused;
     rig.leftLeg.rotation.x *= 0.85;
     rig.rightLeg.rotation.x *= 0.85;
     rig.leftKnee.rotation.x = -0.05;
     rig.rightKnee.rotation.x = -0.05;
     rig.leftArm.rotation.x *= 0.85;
-    rig.rightArm.rotation.x *= 0.85;
-    rig.leftElbow.rotation.x = 0.2;
-    rig.rightElbow.rotation.x = 0.2;
+    rig.rightArm.rotation.x = isBrowsing ? 0.34 + Math.sin(elapsed * 1.9 + seed) * 0.08 : rig.rightArm.rotation.x * 0.85;
+    rig.leftElbow.rotation.x = 0.22;
+    rig.rightElbow.rotation.x = isBrowsing ? 0.62 + Math.sin(elapsed * 2.1 + seed) * 0.12 : 0.22;
     rig.torso.rotation.y *= 0.85;
-    rig.hips.rotation.z *= 0.85;
-    rig.hips.position.y = 0.89 + Math.sin(elapsed * 2.0 + npc.loopIndex) * 0.008;
-    rig.head.rotation.y = Math.sin(elapsed * 1.1 + npc.loopIndex) * 0.22;
+    rig.hips.rotation.z = Math.sin(elapsed * 1.1 + seed) * 0.016;
+    rig.hips.position.y = 0.89 + Math.sin(elapsed * 2.0 + seed) * 0.008;
+    rig.head.rotation.y = Math.sin(elapsed * 1.15 + seed) * 0.28;
+    rig.head.rotation.x = isBrowsing ? -0.06 : Math.sin(elapsed * 0.8 + seed) * 0.03;
   } else {
     const s = Math.sin(npc.gaitPhase);
     const c = Math.cos(npc.gaitPhase);
-    const swing = s * 0.48;
+    const amp = activity === 'stroll' ? 0.38 : 0.48;
+    const swing = s * amp;
     rig.hips.position.y = 0.89 + Math.abs(c) * 0.025 - 0.01;
     rig.hips.rotation.z = s * 0.042;
     rig.torso.rotation.set(-0.03, -s * 0.14, -s * 0.035);
     rig.head.rotation.y = s * 0.1;
+    rig.head.rotation.x = 0;
     rig.leftLeg.rotation.x = swing;
     rig.rightLeg.rotation.x = -swing;
     rig.leftKnee.rotation.x = -(0.05 + Math.max(0, Math.sin(npc.gaitPhase + 1.5)) * 0.56);

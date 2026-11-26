@@ -2,6 +2,8 @@ export type GamePhase = 'title' | 'playing' | 'paused';
 
 export type TimeOfDayPhase = 'pagi' | 'siang' | 'sore' | 'malam';
 
+export type WeatherPhase = 'sunny' | 'rainy' | 'foggy';
+
 export type DistrictId =
   | 'downtown'
   | 'residential'
@@ -291,6 +293,15 @@ export interface NpcWaypointLoop {
   points: Array<{ x: number; z: number }>;
 }
 
+export type NpcActivity =
+  | 'walk'
+  | 'stroll'
+  | 'idle_look'
+  | 'chatting'
+  | 'browse'
+  | 'working'
+  | 'sitting';
+
 export interface NpcState {
   id: string;
   variant: number;
@@ -306,6 +317,15 @@ export interface NpcState {
   walkDistanceSincePause: number;
   nextPauseDistance: number;
   isPaused: boolean;
+  activity?: NpcActivity;
+  buildingId?: string | null;
+  floorNumber?: number;
+  homeX?: number;
+  homeZ?: number;
+  homeYaw?: number;
+  seatY?: number;
+  patrolPoints?: Array<{ x: number; z: number }>;
+  yieldTimer?: number;
 }
 
 export interface VehicleSpec {
@@ -512,6 +532,7 @@ export interface GameSettings {
   muted: boolean;
   musicEnabled: boolean;
   timeOfDay: TimeOfDayPhase;
+  weather?: WeatherPhase;
   graphicsQuality: GraphicsQuality;
 }
 
@@ -846,6 +867,7 @@ export interface InputState {
 export interface HudSnapshot {
   phase: GamePhase;
   timeOfDay: TimeOfDayPhase;
+  weather?: WeatherPhase;
   timeLabel: string;
   district: DistrictId;
   districtName: string;

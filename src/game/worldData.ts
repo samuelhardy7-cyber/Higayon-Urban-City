@@ -1357,16 +1357,6 @@ function createCityLayout(): CityLayout {
     {
       id: 'loop_coastal_prom',
       points: [
-        { x: 89.8, z: 4.0 },
-        { x: 89.8, z: 78.0 },
-        { x: 93.8, z: 78.0 },
-        { x: 93.8, z: 4.0 },
-      ],
-    },
-    // Coastal Restaurants & Beach Promenade loop
-    {
-      id: 'loop_coastal_prom',
-      points: [
         { x: 89.8, z: 8.0 },
         { x: 89.8, z: 78.0 },
         { x: 93.8, z: 78.0 },

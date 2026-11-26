@@ -263,6 +263,7 @@ export function createDefaultSettings(): GameSettings {
     muted: false,
     musicEnabled: true,
     timeOfDay: 'siang',
+    weather: 'sunny',
     graphicsQuality: 'high',
   };
 }

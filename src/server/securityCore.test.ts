@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { formatFirebaseAuthError } from '../game/authErrors';
 import { resolveQuestionKpReward } from '../game/rewardShopCatalog';
 import {
   BOOTSTRAPPED_TEACHER_EMAIL,
@@ -9,6 +10,7 @@ import {
   PinRateLimiter,
   TeacherTokenManager,
   hashPin,
+  resolveCallerAuthorization,
   validatePinFormat,
   verifyPinHash,
 } from './securityCore';
@@ -557,4 +559,78 @@ test('GameBackendStore preserves underwater ocean and submarine diving Y coordin
   assert.equal(deepDive.movementState, 'diving');
 });
 
+test('resolveCallerAuthorization keeps unverified emails strictly as students while allowing verified teachers', () => {
+  const store = new GameBackendStore({ persistPath: null });
 
+  const unverifiedStudent = resolveCallerAuthorization(
+    { email: 'student@school.edu', emailVerified: false },
+    store,
+  );
+  assert.equal(unverifiedStudent.role, 'student');
+  assert.equal(unverifiedStudent.canAccessTeacherTools, false);
+
+  const unverifiedSpoof = resolveCallerAuthorization(
+    { email: BOOTSTRAPPED_TEACHER_EMAIL, emailVerified: false },
+    store,
+  );
+  assert.equal(unverifiedSpoof.role, 'student');
+  assert.equal(unverifiedSpoof.isBootstrappedTeacher, false);
+  assert.equal(unverifiedSpoof.canAccessTeacherTools, false);
+
+  const verifiedTeacher = resolveCallerAuthorization(
+    { email: BOOTSTRAPPED_TEACHER_EMAIL, emailVerified: true },
+    store,
+  );
+  assert.equal(verifiedTeacher.role, 'teacher');
+  assert.equal(verifiedTeacher.isBootstrappedTeacher, true);
+  assert.equal(verifiedTeacher.canAccessTeacherTools, true);
+});
+
+test('formatFirebaseAuthError maps unauthorized-domain cleanly without raw Firebase prefix', () => {
+  const fromCode = formatFirebaseAuthError({ code: 'auth/unauthorized-domain' });
+  assert.equal(fromCode.includes('Firebase:'), false);
+  assert.ok(fromCode.includes('Email & Kata Sandi'));
+  assert.ok(fromCode.includes('Authorized domains'));
+
+  const fromWrappedMessage = formatFirebaseAuthError(
+    new Error('Firebase: Error (auth/unauthorized-domain).'),
+  );
+  assert.equal(fromWrappedMessage.includes('Firebase:'), false);
+  assert.ok(fromWrappedMessage.includes('Email & Kata Sandi'));
+
+  const fromUnknownFirebase = formatFirebaseAuthError(
+    new Error('Firebase: Error (auth/something-new-unexpected).'),
+  );
+  assert.equal(fromUnknownFirebase.includes('Firebase:'), false);
+});
+
+test('GameBackendStore replaceQuestionDatabase sanitizes placementScope, targetBuildingId, and floorPlacement', () => {
+  const store = new GameBackendStore({ persistPath: null });
+  const db = store.getFullDatabase();
+  const mutated = {
+    ...db,
+    questions: [
+      {
+        ...db.questions[0],
+        placementScope: 'indoor' as const,
+        targetBuildingId: 'freedom_tower',
+        floorPlacement: 22,
+      },
+      {
+        ...db.questions[1],
+        placementScope: 'invalid_scope' as unknown as 'both',
+        targetBuildingId: 'bad target with spaces!',
+        floorPlacement: 99,
+      },
+    ],
+  };
+
+  const saved = store.replaceQuestionDatabase(mutated);
+  assert.equal(saved.questions[0].placementScope, 'indoor');
+  assert.equal(saved.questions[0].targetBuildingId, 'freedom_tower');
+  assert.equal(saved.questions[0].floorPlacement, 22);
+
+  assert.equal(saved.questions[1].placementScope, 'both');
+  assert.equal(saved.questions[1].targetBuildingId, null);
+  assert.equal(saved.questions[1].floorPlacement, null);
+});

@@ -2,6 +2,7 @@ import { useEffect, useRef, type FC, type PointerEvent as ReactPointerEvent } fr
 import {
   FolderOpen,
   Home,
+  Lock,
   Music,
   Play,
   RotateCcw,
@@ -259,6 +260,19 @@ export const PauseModal: FC<PauseModalProps> = ({
                 ? `Classroom Session (${activeSession.session.joinCode})`
                 : 'Classroom Session & Account'}
             </span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="pause-teacher-btn"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onSecretTeacherTrigger();
+            }}
+            className="w-full inline-flex items-center justify-center gap-2 px-5 py-2 rounded-lg border border-amber-400/40 bg-amber-500/10 text-amber-300 font-semibold text-xs sm:text-sm hover:bg-amber-500/20 transition-colors"
+          >
+            <Lock className="w-4 h-4" />
+            <span>Teacher Mode (Edit Questions &amp; Locations)</span>
           </button>
 
           <div className="grid grid-cols-2 gap-2">

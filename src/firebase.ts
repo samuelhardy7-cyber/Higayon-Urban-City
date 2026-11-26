@@ -1,10 +1,15 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import {
   GoogleAuthProvider,
+  createUserWithEmailAndPassword,
   getAuth,
   onAuthStateChanged,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateProfile,
   type User,
 } from 'firebase/auth';
 import {
@@ -87,18 +92,81 @@ export function handleFirestoreError(
 export async function testConnection(): Promise<void> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
+  } catch {
+    // Non-blocking connectivity check
   }
 }
 
 void testConnection();
 
+import { formatFirebaseAuthError, validateEmailAddress } from './game/authErrors';
+
+export { formatFirebaseAuthError, validateEmailAddress };
+
 export async function signInWithGooglePopup(): Promise<User> {
-  const result = await signInWithPopup(auth, googleProvider);
-  return result.user;
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (err) {
+    throw new Error(formatFirebaseAuthError(err));
+  }
+}
+
+export async function signInWithEmailPassword(email: string, password: string): Promise<User> {
+  const emailErr = validateEmailAddress(email);
+  if (emailErr) throw new Error(emailErr);
+  if (!password || password.length < 1) {
+    throw new Error('Masukkan kata sandi terlebih dahulu.');
+  }
+  try {
+    const result = await signInWithEmailAndPassword(auth, email.trim(), password);
+    return result.user;
+  } catch (err) {
+    throw new Error(formatFirebaseAuthError(err));
+  }
+}
+
+export async function registerWithEmailPassword(
+  email: string,
+  password: string,
+  displayName?: string,
+): Promise<User> {
+  const emailErr = validateEmailAddress(email);
+  if (emailErr) throw new Error(emailErr);
+  if (!password || password.length < 6) {
+    throw new Error('Kata sandi minimal 6 karakter.');
+  }
+  try {
+    const result = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    const cleanedName = (displayName || '').trim().slice(0, 40);
+    if (cleanedName) {
+      await updateProfile(result.user, { displayName: cleanedName }).catch(() => {});
+    }
+    await sendEmailVerification(result.user).catch(() => {});
+    return result.user;
+  } catch (err) {
+    throw new Error(formatFirebaseAuthError(err));
+  }
+}
+
+export async function sendFirebasePasswordReset(email: string): Promise<void> {
+  const emailErr = validateEmailAddress(email);
+  if (emailErr) throw new Error(emailErr);
+  try {
+    await sendPasswordResetEmail(auth, email.trim());
+  } catch (err) {
+    throw new Error(formatFirebaseAuthError(err));
+  }
+}
+
+export async function resendVerificationEmail(): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Silakan login terlebih dahulu.');
+  try {
+    await sendEmailVerification(user);
+  } catch (err) {
+    throw new Error(formatFirebaseAuthError(err));
+  }
 }
 
 export async function signOutFirebase(): Promise<void> {
@@ -201,6 +269,8 @@ export async function syncTeacherDatabaseToFirestore(database: QuestionDatabase)
         points: q.points,
         buildingCategory: q.buildingCategory,
         floorPlacement: q.floorPlacement ?? null,
+        placementScope: q.placementScope || 'both',
+        targetBuildingId: q.targetBuildingId ?? null,
         questionSetId: q.questionSetId,
         status,
         createdAt: serverTimestamp(),
@@ -223,6 +293,8 @@ export async function syncTeacherDatabaseToFirestore(database: QuestionDatabase)
         points: pub.points,
         buildingCategory: pub.buildingCategory,
         floorPlacement: pub.floorPlacement ?? null,
+        placementScope: pub.placementScope || 'both',
+        targetBuildingId: pub.targetBuildingId ?? null,
         questionSetId: pub.questionSetId,
         status,
         updatedAt: serverTimestamp(),

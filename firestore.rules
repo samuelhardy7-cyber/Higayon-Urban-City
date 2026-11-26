@@ -77,7 +77,7 @@ service cloud.firestore {
           'id', 'authorUid', 'subjectId', 'subjectName', 'topic', 'type',
           'questionText', 'optionA', 'optionB', 'optionC', 'optionD', 'correctAnswer',
           'explanation', 'difficulty', 'points', 'buildingCategory', 'floorPlacement',
-          'questionSetId', 'status', 'createdAt', 'updatedAt'
+          'placementScope', 'targetBuildingId', 'questionSetId', 'status', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && isValidId(data.authorUid)
@@ -97,6 +97,8 @@ service cloud.firestore {
         && data.points is number && data.points >= 1 && data.points <= 10000
         && data.buildingCategory in ['any', 'residential', 'commercial', 'business', 'industrial']
         && (!('floorPlacement' in data) || data.floorPlacement == null || (data.floorPlacement is number && data.floorPlacement >= 1 && data.floorPlacement <= 22 && data.floorPlacement % 1 == 0))
+        && (!('placementScope' in data) || data.placementScope in ['both', 'indoor', 'outdoor'])
+        && (!('targetBuildingId' in data) || data.targetBuildingId == null || (data.targetBuildingId is string && data.targetBuildingId.size() >= 1 && data.targetBuildingId.size() <= 64 && data.targetBuildingId.matches('^[a-zA-Z0-9_\\-]+$')))
         && isValidId(data.questionSetId)
         && data.status in ['active', 'inactive']
         && data.createdAt is timestamp
@@ -113,7 +115,7 @@ service cloud.firestore {
           'id', 'subjectId', 'subjectName', 'topic', 'type',
           'questionText', 'optionA', 'optionB', 'optionC', 'optionD',
           'difficulty', 'points', 'buildingCategory', 'floorPlacement',
-          'questionSetId', 'status', 'updatedAt'
+          'placementScope', 'targetBuildingId', 'questionSetId', 'status', 'updatedAt'
         ])
         && !('correctAnswer' in data)
         && !('explanation' in data)
@@ -131,6 +133,8 @@ service cloud.firestore {
         && data.points is number && data.points >= 1 && data.points <= 10000
         && data.buildingCategory in ['any', 'residential', 'commercial', 'business', 'industrial']
         && (!('floorPlacement' in data) || data.floorPlacement == null || (data.floorPlacement is number && data.floorPlacement >= 1 && data.floorPlacement <= 22 && data.floorPlacement % 1 == 0))
+        && (!('placementScope' in data) || data.placementScope in ['both', 'indoor', 'outdoor'])
+        && (!('targetBuildingId' in data) || data.targetBuildingId == null || (data.targetBuildingId is string && data.targetBuildingId.size() >= 1 && data.targetBuildingId.size() <= 64 && data.targetBuildingId.matches('^[a-zA-Z0-9_\\-]+$')))
         && isValidId(data.questionSetId)
         && data.status in ['active', 'inactive']
         && data.updatedAt is timestamp;
@@ -301,7 +305,7 @@ service cloud.firestore {
           'subjectId', 'subjectName', 'topic', 'type', 'questionText',
           'optionA', 'optionB', 'optionC', 'optionD', 'correctAnswer',
           'explanation', 'difficulty', 'points', 'buildingCategory',
-          'floorPlacement', 'questionSetId', 'status', 'updatedAt', 'authorUid'
+          'floorPlacement', 'placementScope', 'targetBuildingId', 'questionSetId', 'status', 'updatedAt', 'authorUid'
         ]);
       allow delete: if isValidId(questionId) && isTeacher();
     }
@@ -324,7 +328,7 @@ service cloud.firestore {
           'subjectId', 'subjectName', 'topic', 'type', 'questionText',
           'optionA', 'optionB', 'optionC', 'optionD',
           'difficulty', 'points', 'buildingCategory', 'floorPlacement',
-          'questionSetId', 'status', 'updatedAt'
+          'placementScope', 'targetBuildingId', 'questionSetId', 'status', 'updatedAt'
         ]);
       allow delete: if isValidId(questionId) && isTeacher();
     }

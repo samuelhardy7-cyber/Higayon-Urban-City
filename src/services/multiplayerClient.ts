@@ -97,15 +97,27 @@ async function apiJson<T>(
     headers,
   });
 
-  const data = (await res.json().catch(() => ({}))) as T & {
+  const rawText = await res.text().catch(() => '');
+  let data = {} as T & {
     error?: string;
     code?: string;
     retryAfterSeconds?: number;
     remainingAttempts?: number;
     locked?: boolean;
   };
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText) as typeof data;
+    } catch {
+      data = {} as typeof data;
+    }
+  }
   if (!res.ok) {
-    const err = new Error(data.error || `Request failed (${res.status})`) as Error & {
+    const fallbackErr =
+      res.status === 404 || res.status === 405
+        ? 'Layanan server sedang tidak tersedia pada mode statis.'
+        : `Request failed (${res.status})`;
+    const err = new Error(data.error || fallbackErr) as Error & {
       status?: number;
       code?: string;
       retryAfterSeconds?: number;

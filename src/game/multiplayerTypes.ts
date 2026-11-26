@@ -8,6 +8,7 @@ export interface AuthUserProfile {
   uid: string;
   displayName: string;
   email: string;
+  emailVerified?: boolean;
   photoURL: string;
   role: UserRole;
   isBootstrappedTeacher?: boolean;

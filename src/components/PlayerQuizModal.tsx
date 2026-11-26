@@ -11,6 +11,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+import { getPlacementTargetLabel } from '../game/questionPlacement';
 import type {
   AnswerKey,
   PlayerQuestionChallenge,
@@ -134,7 +135,9 @@ export const PlayerQuizModal: FC<PlayerQuizModalProps> = ({
                 {challenge.questionSetName}
               </span>
               <span className="text-slate-500">
-                {CATEGORY_LABELS[challenge.buildingCategory]} · {floorLabel}
+                {getPlacementTargetLabel(challenge.targetBuildingId) ||
+                  CATEGORY_LABELS[challenge.buildingCategory]}{' '}
+                · {floorLabel}
               </span>
             </div>
           </div>

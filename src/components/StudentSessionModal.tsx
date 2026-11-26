@@ -3,8 +3,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  Lock,
   LogIn,
   LogOut,
+  Mail,
   MapPin,
   Radio,
   Users,
@@ -29,10 +31,15 @@ interface StudentSessionModalProps {
   guestDisplayName?: string;
   explorationObjectives?: HudSnapshot['explorationObjectives'];
   onSignInGoogle: () => Promise<void>;
+  onSignInEmail?: (email: string, password: string) => Promise<void>;
+  onRegisterEmail?: (email: string, password: string, displayName?: string) => Promise<void>;
+  onResetPassword?: (email: string) => Promise<void>;
+  onResendVerification?: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onUpdateGuestName?: (name: string) => Promise<void>;
   onJoinSession: (joinCode: string) => Promise<void>;
   onLeaveSession: () => void;
+  onOpenTeacherMode?: () => void;
   onClose: () => void;
 }
 
@@ -53,16 +60,26 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
   guestDisplayName = '',
   explorationObjectives,
   onSignInGoogle,
+  onSignInEmail,
+  onRegisterEmail,
+  onResetPassword,
+  onResendVerification,
   onSignOut,
   onUpdateGuestName,
   onJoinSession,
   onLeaveSession,
+  onOpenTeacherMode,
   onClose,
 }) => {
   const [joinCode, setJoinCode] = useState('');
   const [nameInput, setNameInput] = useState(guestDisplayName);
   const [savingName, setSavingName] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin');
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [accountNameInput, setAccountNameInput] = useState('');
+  const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const combinedError = localError || sessionError;
@@ -79,6 +96,55 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
       await onUpdateGuestName(nameInput);
     } finally {
       setSavingName(false);
+    }
+  };
+
+  const handleEmailSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setLocalError(null);
+    setInfoNotice(null);
+    const cleanedEmail = emailInput.trim();
+    if (!cleanedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanedEmail)) {
+      setLocalError('Masukkan alamat email yang valid (contoh: siswa@sekolah.sch.id).');
+      return;
+    }
+    if (!passwordInput || (authMode === 'register' && passwordInput.length < 6)) {
+      setLocalError(
+        authMode === 'register'
+          ? 'Kata sandi minimal 6 karakter.'
+          : 'Masukkan kata sandi terlebih dahulu.',
+      );
+      return;
+    }
+    try {
+      if (authMode === 'register') {
+        if (!onRegisterEmail) return;
+        await onRegisterEmail(cleanedEmail, passwordInput, accountNameInput);
+        setInfoNotice('Akun berhasil dibuat! Anda sudah masuk ke sesi Open World.');
+      } else {
+        if (!onSignInEmail) return;
+        await onSignInEmail(cleanedEmail, passwordInput);
+      }
+      setPasswordInput('');
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Gagal login menggunakan email.');
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!onResetPassword) return;
+    setLocalError(null);
+    setInfoNotice(null);
+    const cleanedEmail = emailInput.trim();
+    if (!cleanedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanedEmail)) {
+      setLocalError('Ketik alamat email Anda di kolom email terlebih dahulu untuk reset kata sandi.');
+      return;
+    }
+    try {
+      await onResetPassword(cleanedEmail);
+      setInfoNotice(`Link reset kata sandi dikirim ke ${cleanedEmail}.`);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Tidak dapat mengirim reset kata sandi.');
     }
   };
 
@@ -147,10 +213,29 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
         {combinedError && (
           <div
             data-testid="session-modal-error"
-            className="rounded-lg border border-rose-400/45 bg-rose-950/60 px-3 py-2.5 text-xs text-rose-200 flex items-start gap-2"
+            className="rounded-lg border border-rose-400/45 bg-rose-950/60 px-3 py-2.5 text-xs text-rose-200 space-y-1.5"
           >
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <span>{combinedError}</span>
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>{combinedError}</span>
+            </div>
+            {(combinedError.toLowerCase().includes('domain') ||
+              combinedError.toLowerCase().includes('google') ||
+              combinedError.toLowerCase().includes('popup')) && (
+              <div className="pl-6 text-[11px] text-amber-200">
+                Tip: Login menggunakan tab <strong>Sign In with Email</strong> atau <strong>Create Account</strong> di bawah berfungsi langsung tanpa pembatasan domain.
+              </div>
+            )}
+          </div>
+        )}
+
+        {infoNotice && (
+          <div
+            data-testid="session-modal-notice"
+            className="rounded-lg border border-emerald-400/45 bg-emerald-950/60 px-3 py-2.5 text-xs text-emerald-200 flex items-start gap-2"
+          >
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <span>{infoNotice}</span>
           </div>
         )}
 
@@ -158,28 +243,145 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
         <div className="rounded-xl border border-white/10 bg-slate-900/80 p-3.5 space-y-3">
           {!authUser ? (
             <>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="text-xs font-semibold text-white">Playing in Open World City</div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    You are live with other players! Sign in with Google to save Knowledge Points or join a private Classroom Session.
+                    Sign in with Email or Google to save Knowledge Points and join Classroom Sessions.
                   </div>
                 </div>
-                <button
-                  type="button"
-                  disabled={authLoading}
-                  data-testid="session-google-signin"
-                  onClick={() =>
-                    void onSignInGoogle().catch((e) =>
-                      setLocalError(e instanceof Error ? e.message : 'Sign-in cancelled.'),
-                    )
-                  }
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-slate-950 font-semibold text-xs hover:bg-amber-400 transition-colors shrink-0 disabled:opacity-60"
-                >
-                  <LogIn className="w-3.5 h-3.5" />
-                  <span>{authLoading ? 'Signing in...' : 'Sign in with Google'}</span>
-                </button>
               </div>
+
+              {(onSignInEmail || onRegisterEmail) && (
+                <form onSubmit={handleEmailSubmit} className="space-y-2.5 pt-2 border-t border-white/10">
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      data-testid="auth-tab-signin"
+                      onClick={() => {
+                        setAuthMode('signin');
+                        setLocalError(null);
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                        authMode === 'signin'
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      Sign In with Email
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="auth-tab-register"
+                      onClick={() => {
+                        setAuthMode('register');
+                        setLocalError(null);
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                        authMode === 'register'
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      Create Account
+                    </button>
+                  </div>
+
+                  {authMode === 'register' && (
+                    <input
+                      type="text"
+                      maxLength={32}
+                      value={accountNameInput}
+                      onChange={(e) => setAccountNameInput(e.target.value)}
+                      data-testid="auth-name-input"
+                      placeholder="Display Name (optional)"
+                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-white/15 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                    />
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="email"
+                      autoComplete="email"
+                      value={emailInput}
+                      onChange={(e) => {
+                        setLocalError(null);
+                        setEmailInput(e.target.value);
+                      }}
+                      data-testid="auth-email-input"
+                      placeholder="Email address"
+                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-white/15 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                    />
+                    <input
+                      type="password"
+                      autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
+                      value={passwordInput}
+                      onChange={(e) => {
+                        setLocalError(null);
+                        setPasswordInput(e.target.value);
+                      }}
+                      data-testid="auth-password-input"
+                      placeholder={authMode === 'register' ? 'Password (min 6 chars)' : 'Password'}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-white/15 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    {authMode === 'signin' && onResetPassword ? (
+                      <button
+                        type="button"
+                        data-testid="auth-reset-btn"
+                        disabled={authLoading}
+                        onClick={() => void handleForgotPassword()}
+                        className="text-[11px] text-sky-300 hover:text-sky-200 underline disabled:opacity-50"
+                      >
+                        Forgot password?
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-slate-400">Min. 6 characters</span>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={authLoading}
+                      data-testid="auth-email-submit"
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-sky-500 text-slate-950 font-semibold text-xs hover:bg-sky-400 transition-colors disabled:opacity-60"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>
+                        {authLoading
+                          ? 'Processing...'
+                          : authMode === 'register'
+                            ? 'Register Email'
+                            : 'Login Email'}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                <div className="h-px flex-1 bg-white/10" />
+                <span className="text-[10px] uppercase tracking-wider text-slate-400">or</span>
+                <div className="h-px flex-1 bg-white/10" />
+              </div>
+
+              <button
+                type="button"
+                disabled={authLoading}
+                data-testid="session-google-signin"
+                onClick={() => {
+                  setLocalError(null);
+                  setInfoNotice(null);
+                  void onSignInGoogle().catch((e) =>
+                    setLocalError(e instanceof Error ? e.message : 'Sign-in cancelled.'),
+                  );
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-slate-950 font-semibold text-xs hover:bg-amber-400 transition-colors disabled:opacity-60"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>{authLoading ? 'Signing in...' : 'Continue with Google'}</span>
+              </button>
+
               {onUpdateGuestName && (
                 <form onSubmit={handleSaveName} className="flex gap-2 pt-2 border-t border-white/10">
                   <input
@@ -188,14 +390,14 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
                     value={nameInput}
                     onChange={(e) => setNameInput(e.target.value)}
                     data-testid="guest-name-input"
-                    placeholder="Your Player Name (e.g. Alex)"
+                    placeholder="Guest Player Name (e.g. Alex)"
                     className="flex-1 px-3 py-1.5 rounded-lg bg-slate-950 border border-white/15 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
                   />
                   <button
                     type="submit"
                     disabled={savingName}
                     data-testid="guest-name-save"
-                    className="px-3.5 py-1.5 rounded-lg bg-sky-500/20 border border-sky-400/40 text-xs font-semibold text-sky-300 hover:bg-sky-500/30 transition-colors shrink-0"
+                    className="px-3.5 py-1.5 rounded-lg bg-slate-800 border border-white/15 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition-colors shrink-0"
                   >
                     {savingName ? 'Saving...' : 'Set Name'}
                   </button>
@@ -203,26 +405,63 @@ export const StudentSessionModal: FC<StudentSessionModalProps> = ({
               )}
             </>
           ) : (
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
-                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">
-                    {authProfile?.displayName || authUser.displayName || authUser.email}
-                  </span>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">
+                      {authProfile?.displayName || authUser.displayName || authUser.email}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 truncate mt-0.5">
+                    {authProfile?.email || authUser.email}
+                  </div>
                 </div>
-                <div className="text-[11px] text-slate-400 truncate mt-0.5">
-                  {authProfile?.email || authUser.email}
+                <button
+                  type="button"
+                  data-testid="session-google-signout"
+                  onClick={() => void onSignOut()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/15 bg-slate-800 text-xs font-medium text-slate-200 hover:bg-slate-700 shrink-0"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign out</span>
+                </button>
+              </div>
+              {!authUser.emailVerified && onResendVerification && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-400/30 bg-amber-950/35 px-2.5 py-1.5 text-[11px] text-amber-200">
+                  <span>Email verification optional for students; required for Teacher Mode.</span>
+                  <button
+                    type="button"
+                    data-testid="resend-verification-btn"
+                    onClick={() => {
+                      setLocalError(null);
+                      void onResendVerification()
+                        .then(() => setInfoNotice('Verification email sent. Check your inbox.'))
+                        .catch((e) => setLocalError(e instanceof Error ? e.message : 'Unable to send email.'));
+                    }}
+                    className="text-amber-300 font-semibold underline shrink-0"
+                  >
+                    Resend
+                  </button>
                 </div>
+              )}
+            </div>
+          )}
+
+          {onOpenTeacherMode && (
+            <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2">
+              <div className="text-[11px] text-slate-400">
+                Instructor tools (Questions &amp; Locations)
               </div>
               <button
                 type="button"
-                data-testid="session-google-signout"
-                onClick={() => void onSignOut()}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/15 bg-slate-800 text-xs font-medium text-slate-200 hover:bg-slate-700 shrink-0"
+                data-testid="session-teacher-btn"
+                onClick={onOpenTeacherMode}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-400/40 bg-amber-500/15 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/25 transition-colors shrink-0"
               >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Sign out</span>
+                <Lock className="w-3 h-3" />
+                <span>Teacher Mode</span>
               </button>
             </div>
           )}

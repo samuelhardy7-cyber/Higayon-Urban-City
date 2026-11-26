@@ -14,6 +14,9 @@ export interface CityTextures {
   leatherBumpMap: THREE.CanvasTexture;
   rooftopTileMap: THREE.CanvasTexture;
   helipadMap: THREE.CanvasTexture;
+  waterBumpMap: THREE.CanvasTexture;
+  waterFoamMap: THREE.CanvasTexture;
+  fountainRippleMap: THREE.CanvasTexture;
   dispose: () => void;
 }
 
@@ -276,6 +279,73 @@ export function createCityTextures(maxAnisotropy: number): CityTextures {
   helipadMap.wrapS = THREE.ClampToEdgeWrapping;
   helipadMap.wrapT = THREE.ClampToEdgeWrapping;
 
+  // 13. Seamless Procedural Water Wave Bump Map (tileable wave ripples)
+  const [wbCanvas, wbCtx] = makeCanvas(256, 256);
+  const wbImg = wbCtx.createImageData(256, 256);
+  for (let py = 0; py < 256; py++) {
+    const v = (py / 256) * Math.PI * 2;
+    for (let px = 0; px < 256; px++) {
+      const u = (px / 256) * Math.PI * 2;
+      const w1 = Math.sin(u * 2 + Math.cos(v * 2) * 0.9);
+      const w2 = Math.sin(v * 3 - u * 1 + Math.sin(u * 2 + v) * 0.6);
+      const w3 = Math.cos(u * 5 + v * 4) * 0.45;
+      const w4 = Math.sin(u * 8 - v * 6) * 0.22;
+      const val = Math.max(0, Math.min(255, Math.floor(128 + (w1 * 0.42 + w2 * 0.34 + w3 + w4) * 44)));
+      const idx = (py * 256 + px) * 4;
+      wbImg.data[idx] = val;
+      wbImg.data[idx + 1] = val;
+      wbImg.data[idx + 2] = val;
+      wbImg.data[idx + 3] = 255;
+    }
+  }
+  wbCtx.putImageData(wbImg, 0, 0);
+  const waterBumpMap = finalizeTexture(wbCanvas, false, aniso, 38, 38);
+
+  // 14. Seamless Directional Current & Sea-Foam Streak Texture
+  const [wfCanvas, wfCtx] = makeCanvas(256, 256);
+  wfCtx.clearRect(0, 0, 256, 256);
+  for (let i = 0; i < 64; i++) {
+    const sx = rand() * 256;
+    const sy = rand() * 256;
+    const w = 10 + rand() * 22;
+    const len = 34 + rand() * 68;
+    const alpha = 0.08 + rand() * 0.24;
+    for (const ox of [-256, 0, 256]) {
+      for (const oy of [-256, 0, 256]) {
+        const x = sx + ox;
+        const y = sy + oy;
+        const g = wfCtx.createRadialGradient(x, y, 1, x, y, len * 0.55);
+        g.addColorStop(0, `rgba(232, 249, 255, ${alpha.toFixed(3)})`);
+        g.addColorStop(0.55, `rgba(175, 232, 248, ${(alpha * 0.45).toFixed(3)})`);
+        g.addColorStop(1, 'rgba(175, 232, 248, 0)');
+        wfCtx.save();
+        wfCtx.translate(x, y);
+        wfCtx.scale(w / len, 1);
+        wfCtx.fillStyle = g;
+        wfCtx.beginPath();
+        wfCtx.arc(0, 0, len * 0.55, 0, Math.PI * 2);
+        wfCtx.fill();
+        wfCtx.restore();
+      }
+    }
+  }
+  const waterFoamMap = finalizeTexture(wfCanvas, true, aniso, 1, 3);
+
+  // 15. Concentric Fountain Pool Ripple Texture
+  const [frCanvas, frCtx] = makeCanvas(256, 256);
+  frCtx.fillStyle = '#3896bd';
+  frCtx.fillRect(0, 0, 256, 256);
+  for (let r = 18; r <= 122; r += 16) {
+    frCtx.strokeStyle = r % 32 === 18 ? 'rgba(218, 246, 255, 0.42)' : 'rgba(145, 224, 248, 0.25)';
+    frCtx.lineWidth = 3;
+    frCtx.beginPath();
+    frCtx.arc(128, 128, r, 0, Math.PI * 2);
+    frCtx.stroke();
+  }
+  const fountainRippleMap = finalizeTexture(frCanvas, true, aniso, 1, 1);
+  fountainRippleMap.wrapS = THREE.ClampToEdgeWrapping;
+  fountainRippleMap.wrapT = THREE.ClampToEdgeWrapping;
+
   return {
     asphaltMap,
     asphaltBump,
@@ -290,6 +360,9 @@ export function createCityTextures(maxAnisotropy: number): CityTextures {
     leatherBumpMap,
     rooftopTileMap,
     helipadMap,
+    waterBumpMap,
+    waterFoamMap,
+    fountainRippleMap,
     dispose: () => {
       asphaltMap.dispose();
       asphaltBump.dispose();
@@ -304,6 +377,9 @@ export function createCityTextures(maxAnisotropy: number): CityTextures {
       leatherBumpMap.dispose();
       rooftopTileMap.dispose();
       helipadMap.dispose();
+      waterBumpMap.dispose();
+      waterFoamMap.dispose();
+      fountainRippleMap.dispose();
     },
   };
 }

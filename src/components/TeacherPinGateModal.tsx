@@ -5,6 +5,7 @@ import {
   Lock,
   LogIn,
   LogOut,
+  Mail,
   ShieldAlert,
   ShieldCheck,
   X,
@@ -22,6 +23,8 @@ interface TeacherPinGateModalProps {
   authProfile: AuthUserProfile | null;
   authLoading: boolean;
   onSignInGoogle: () => Promise<void>;
+  onSignInEmail?: (email: string, password: string) => Promise<void>;
+  onResendVerification?: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onVerified: (teacherToken: string, expiresAt: number) => void;
   onClose: () => void;
@@ -32,6 +35,8 @@ export const TeacherPinGateModal: FC<TeacherPinGateModalProps> = ({
   authProfile,
   authLoading,
   onSignInGoogle,
+  onSignInEmail,
+  onResendVerification,
   onSignOut,
   onVerified,
   onClose,
@@ -40,11 +45,16 @@ export const TeacherPinGateModal: FC<TeacherPinGateModalProps> = ({
   const [statusLoading, setStatusLoading] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [confirmPinInput, setConfirmPinInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const [lockCountdown, setLockCountdown] = useState(0);
 
-  const isVerifiedTeacher = Boolean(authUser && authProfile?.role === 'teacher');
+  const isVerifiedTeacher = Boolean(
+    authUser && authUser.emailVerified && authProfile?.role === 'teacher',
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -218,17 +228,76 @@ export const TeacherPinGateModal: FC<TeacherPinGateModalProps> = ({
           </div>
         )}
 
+        {infoMsg && (
+          <div className="rounded-lg border border-emerald-400/45 bg-emerald-950/60 px-3 py-2.5 text-xs text-emerald-200">
+            {infoMsg}
+          </div>
+        )}
+
         {/* Step 1: Not signed in */}
         {!authUser && (
-          <div className="space-y-4">
+          <div className="space-y-3.5">
             <p className="text-xs text-slate-300 leading-relaxed">
-              Sign in with an authorized instructor Google account before entering your 6-digit security PIN.
+              Hanya akun <strong className="text-amber-300">Guru (Instructor)</strong> terverifikasi dengan PIN 6 digit yang dapat mengedit soal dan letak soal di kota.
             </p>
+            {onSignInEmail && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setErrorMsg(null);
+                  setInfoMsg(null);
+                  void onSignInEmail(emailInput, passwordInput).catch((err) =>
+                    setErrorMsg(err instanceof Error ? err.message : 'Sign-in failed.'),
+                  );
+                }}
+                className="space-y-2"
+              >
+                <input
+                  type="email"
+                  autoComplete="email"
+                  value={emailInput}
+                  onChange={(e) => {
+                    setErrorMsg(null);
+                    setEmailInput(e.target.value);
+                  }}
+                  data-testid="pin-gate-email-input"
+                  placeholder="Instructor email"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-white/15 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                />
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={passwordInput}
+                  onChange={(e) => {
+                    setErrorMsg(null);
+                    setPasswordInput(e.target.value);
+                  }}
+                  data-testid="pin-gate-password-input"
+                  placeholder="Password"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-white/15 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                />
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  data-testid="pin-gate-email-submit"
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-sky-500 text-slate-950 font-semibold text-xs hover:bg-sky-400 transition-colors disabled:opacity-60"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>{authLoading ? 'Signing in...' : 'Sign in with Email'}</span>
+                </button>
+              </form>
+            )}
             <button
               type="button"
               disabled={authLoading}
               data-testid="pin-gate-google-signin"
-              onClick={() => void onSignInGoogle().catch((e) => setErrorMsg(e instanceof Error ? e.message : 'Sign-in cancelled.'))}
+              onClick={() => {
+                setErrorMsg(null);
+                setInfoMsg(null);
+                void onSignInGoogle().catch((e) =>
+                  setErrorMsg(e instanceof Error ? e.message : 'Sign-in cancelled.'),
+                );
+              }}
               className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500 text-slate-950 font-semibold text-sm hover:bg-amber-400 transition-colors disabled:opacity-60"
             >
               <LogIn className="w-4 h-4" />
@@ -237,18 +306,42 @@ export const TeacherPinGateModal: FC<TeacherPinGateModalProps> = ({
           </div>
         )}
 
-        {/* Step 1b: Signed in but not authorized teacher */}
-        {authUser && authProfile && !isVerifiedTeacher && (
+        {/* Step 1b: Signed in but email not verified or not authorized teacher */}
+        {authUser && !isVerifiedTeacher && (authProfile || !authUser.emailVerified) && (
           <div className="space-y-4">
             <div className="rounded-lg border border-rose-400/40 bg-rose-950/40 p-3.5 text-xs text-rose-200 flex items-start gap-2.5">
               <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
               <div>
-                <div className="font-semibold text-white">Access Denied</div>
+                <div className="font-semibold text-white">
+                  {!authUser.emailVerified ? 'Email Verification Required' : 'Access Denied'}
+                </div>
                 <div className="mt-1">
-                  Signed in as <span className="font-mono-hud text-amber-300">{authProfile.email}</span> (Student account). Instructor authorization is required to open management tools.
+                  {!authUser.emailVerified ? (
+                    <>
+                      Please verify <span className="font-mono-hud text-amber-300">{authUser.email}</span> via the verification link in your inbox before opening Teacher Mode.
+                    </>
+                  ) : (
+                    <>
+                      Signed in as <span className="font-mono-hud text-amber-300">{authProfile?.email || authUser.email}</span> (Student account). Instructor authorization is required to open management tools.
+                    </>
+                  )}
                 </div>
               </div>
             </div>
+            {!authUser.emailVerified && onResendVerification && (
+              <button
+                type="button"
+                onClick={() => {
+                  setErrorMsg(null);
+                  void onResendVerification()
+                    .then(() => setInfoMsg('Verification email sent. Check your inbox, then sign in again.'))
+                    .catch((e) => setErrorMsg(e instanceof Error ? e.message : 'Failed to send verification email.'));
+                }}
+                className="w-full px-3.5 py-2 rounded-lg border border-amber-400/40 bg-amber-500/15 text-xs font-semibold text-amber-200 hover:bg-amber-500/25"
+              >
+                Resend Verification Email
+              </button>
+            )}
             <div className="flex items-center justify-between gap-2">
               <button
                 type="button"

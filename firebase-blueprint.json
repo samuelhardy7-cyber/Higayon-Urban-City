@@ -49,6 +49,8 @@
         "points": { "type": "number" },
         "buildingCategory": { "type": "string", "enum": ["any", "residential", "commercial", "business", "industrial"] },
         "floorPlacement": { "type": "number", "description": "Optional floor placement 1..22 (22 = CITY TOWER Rooftop)" },
+        "placementScope": { "type": "string", "enum": ["both", "indoor", "outdoor"], "description": "Whether question can appear outdoors, indoors, or both." },
+        "targetBuildingId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Optional specific building or outdoor kiosk anchor ID." },
         "questionSetId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "status": { "type": "string", "enum": ["active", "inactive"] },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -93,6 +95,8 @@
         "points": { "type": "number" },
         "buildingCategory": { "type": "string", "enum": ["any", "residential", "commercial", "business", "industrial"] },
         "floorPlacement": { "type": "number", "description": "Optional floor placement 1..22 (22 = CITY TOWER Rooftop)" },
+        "placementScope": { "type": "string", "enum": ["both", "indoor", "outdoor"], "description": "Whether question can appear outdoors, indoors, or both." },
+        "targetBuildingId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Optional specific building or outdoor kiosk anchor ID." },
         "questionSetId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "status": { "type": "string", "enum": ["active", "inactive"] },
         "updatedAt": { "type": "string", "format": "date-time" }

@@ -17,6 +17,8 @@ import {
   createInteriorKioskPlacements,
   createOutdoorKioskPlacements,
   getActiveQuestions,
+  getPlacementTargetLabel,
+  getPlacementTargetOptions,
   getQuestionsForPlacement,
 } from './questionPlacement';
 import { createLocalQuestionRepository } from './questionRepository';
@@ -270,4 +272,67 @@ test('Question repository and SaveGameData persist custom bank & quiz progress i
   const resetProgress = repo.resetPlayerProgress();
   assert.equal(resetProgress.earnedPoints, 0);
   assert.ok(repo.loadDatabase().subjects.some((s) => s.name === 'Art & Design'));
+});
+
+test('Teacher placementScope and targetBuildingId restrict outdoor and indoor kiosks accurately', () => {
+  const db = createSeedQuestionDatabase();
+  const progress = createInitialPlayerQuizProgress();
+  const targetOpts = getPlacementTargetOptions(CITY_LAYOUT);
+  assert.ok(targetOpts.outdoorKiosks.length >= 5);
+  assert.ok(targetOpts.buildings.some((b) => b.id === 'freedom_tower'));
+  assert.equal(getPlacementTargetLabel('kiosk_avenue_hub', CITY_LAYOUT), 'City Avenue Knowledge Hub');
+  assert.ok(getPlacementTargetLabel('freedom_tower', CITY_LAYOUT));
+
+  const towerEntrance = CITY_LAYOUT.entrances.find((e) => e.buildingId === 'freedom_tower')!;
+  const otherBusinessEntrance = CITY_LAYOUT.entrances.find(
+    (e) => e.category === 'business' && e.buildingId !== 'freedom_tower',
+  );
+  const towerBlueprint = createInteriorBlueprintForEntrance(towerEntrance);
+
+  const customDb = {
+    ...db,
+    questions: [
+      {
+        ...db.questions[0],
+        id: 'INDOOR-ONLY-TOWER',
+        placementScope: 'indoor' as const,
+        targetBuildingId: 'freedom_tower',
+        buildingCategory: 'business' as const,
+        floorPlacement: 3,
+      },
+      {
+        ...db.questions[1],
+        id: 'OUTDOOR-ONLY-HUB',
+        placementScope: 'outdoor' as const,
+        targetBuildingId: 'kiosk_avenue_hub',
+        buildingCategory: 'any' as const,
+        floorPlacement: null,
+      },
+    ],
+  };
+
+  // Outdoor kiosks must include OUTDOOR-ONLY-HUB on kiosk_avenue_hub and exclude indoor-only questions
+  const outdoor = createOutdoorKioskPlacements(customDb, progress, CITY_LAYOUT);
+  const avenueKiosk = outdoor.find((k) => k.id === 'kiosk_avenue_hub');
+  assert.ok(avenueKiosk);
+  assert.ok(avenueKiosk.questionIds.includes('OUTDOOR-ONLY-HUB'));
+  assert.ok(outdoor.every((k) => !k.questionIds.includes('INDOOR-ONLY-TOWER')));
+
+  // Floor 3 inside freedom_tower receives INDOOR-ONLY-TOWER, excluding outdoor-only questions
+  const towerKiosks = createInteriorKioskPlacements(towerBlueprint, towerEntrance, customDb, progress);
+  const floor3Kiosks = towerKiosks.filter((k) => k.floorNumber === 3);
+  assert.ok(floor3Kiosks.some((k) => k.questionIds.includes('INDOOR-ONLY-TOWER')));
+  assert.ok(towerKiosks.every((k) => !k.questionIds.includes('OUTDOOR-ONLY-HUB')));
+
+  // Other business building must NOT receive question pinned specifically to freedom_tower
+  if (otherBusinessEntrance) {
+    const otherBlueprint = createInteriorBlueprintForEntrance(otherBusinessEntrance);
+    const otherKiosks = createInteriorKioskPlacements(
+      otherBlueprint,
+      otherBusinessEntrance,
+      customDb,
+      progress,
+    );
+    assert.ok(otherKiosks.every((k) => !k.questionIds.includes('INDOOR-ONLY-TOWER')));
+  }
 });

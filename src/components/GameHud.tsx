@@ -12,6 +12,9 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  CloudFog,
+  CloudRain,
+  CloudSun,
   Compass,
   DoorOpen,
   Flag,
@@ -39,7 +42,7 @@ import {
 import type { EmoteKind } from '../game/characterAnimator';
 import { computeResponsiveJoystickMetrics } from '../game/joystickUtils';
 import type { MultiplayerSessionSnapshot } from '../game/multiplayerTypes';
-import type { DrivingInputState, HudSnapshot, TimeOfDayPhase } from '../game/types';
+import type { DrivingInputState, HudSnapshot, TimeOfDayPhase, WeatherPhase } from '../game/types';
 import { CityMinimap } from './CityMinimap';
 
 interface GameHudProps {
@@ -52,6 +55,7 @@ interface GameHudProps {
   onPause: () => void;
   onToggleMute: () => void;
   onCycleTimeOfDay: () => void;
+  onCycleWeather?: () => void;
   onOpenPhotoMode: () => void;
   onOpenGarage: () => void;
   onOpenCustomize: () => void;
@@ -97,6 +101,17 @@ function renderTimeIcon(phase: TimeOfDayPhase) {
   }
 }
 
+function renderWeatherIcon(weather: WeatherPhase | undefined, className = 'w-4 h-4') {
+  switch (weather) {
+    case 'rainy':
+      return <CloudRain className={`${className} text-sky-300`} />;
+    case 'foggy':
+      return <CloudFog className={`${className} text-slate-300`} />;
+    default:
+      return <CloudSun className={`${className} text-amber-300`} />;
+  }
+}
+
 export const GameHud: FC<GameHudProps> = ({
   snapshot,
   muted,
@@ -107,6 +122,7 @@ export const GameHud: FC<GameHudProps> = ({
   onPause,
   onToggleMute,
   onCycleTimeOfDay,
+  onCycleWeather,
   onOpenPhotoMode,
   onOpenGarage,
   onOpenCustomize,
@@ -262,11 +278,11 @@ export const GameHud: FC<GameHudProps> = ({
         <div className="flex flex-col gap-2">
           {/* Top-Left District + Cash + Health + Wanted + Stamina/Speed Card */}
           <div
-            className="rounded-lg border border-white/15 px-2.5 py-2 sm:px-3.5 sm:py-2.5 shadow-md min-w-[172px] max-w-[214px] sm:max-w-none sm:min-w-[264px]"
+            className="rounded-lg border border-white/15 px-2.5 py-2 sm:px-3.5 sm:py-2.5 shadow-md min-w-[172px] max-w-[196px] sm:max-w-none sm:min-w-[264px]"
             style={{ backgroundColor: 'rgba(15, 23, 42, 0.86)' }}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] sm:text-[11px] font-medium text-amber-400 tracking-wide uppercase truncate">
+            <div className="flex items-center justify-between gap-1.5 sm:gap-2">
+              <span className="text-[9.5px] sm:text-[11px] font-medium text-amber-400 tracking-wide uppercase truncate min-w-0">
                 {isFlying
                   ? 'In Flight'
                   : isDriving
@@ -275,12 +291,13 @@ export const GameHud: FC<GameHudProps> = ({
                       ? interiorCategoryLabel
                       : (snapshot.cityName ?? 'Liberty Metro')}
               </span>
-              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-mono-hud text-slate-300 shrink-0">
+              <span className="inline-flex items-center gap-1 text-[9.5px] sm:text-[11px] font-mono-hud text-slate-300 shrink-0">
+                {renderWeatherIcon(snapshot.weather, 'w-3 h-3 shrink-0')}
                 <span data-testid="hud-time-label" className="text-slate-200">
                   {snapshot.timeLabel}
                 </span>
-                <span className="text-slate-500">·</span>
-                <span className="inline-flex items-center gap-0.5">
+                <span className="text-slate-500 hidden sm:inline">·</span>
+                <span className="hidden sm:inline-flex items-center gap-0.5">
                   <Compass className="w-3 h-3 text-slate-400" />
                   {heading}
                 </span>
@@ -750,6 +767,23 @@ export const GameHud: FC<GameHudProps> = ({
             >
               {renderTimeIcon(snapshot.timeOfDay)}
             </button>
+            {onCycleWeather && (
+              <button
+                type="button"
+                tabIndex={-1}
+                data-testid="weather-toggle"
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  onCycleWeather();
+                }}
+                aria-label={`Change weather (${snapshot.weather || 'sunny'})`}
+                title={`Weather: ${snapshot.timeLabel} (Y)`}
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg border border-white/15 flex items-center justify-center text-white hover:bg-slate-800 transition-colors focus-visible:outline-2 focus-visible:outline-amber-400"
+                style={{ backgroundColor: 'rgba(15, 23, 42, 0.84)' }}
+              >
+                {renderWeatherIcon(snapshot.weather)}
+              </button>
+            )}
             <button
               type="button"
               tabIndex={-1}

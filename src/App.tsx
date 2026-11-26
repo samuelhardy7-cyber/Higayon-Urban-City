@@ -16,6 +16,10 @@ import { TeacherDashboardModal } from './components/TeacherDashboardModal';
 import { TeacherPinGateModal } from './components/TeacherPinGateModal';
 import { TitleOverlay } from './components/TitleOverlay';
 import {
+  registerWithEmailPassword,
+  resendVerificationEmail,
+  sendFirebasePasswordReset,
+  signInWithEmailPassword,
   signInWithGooglePopup,
   signOutFirebase,
   subscribeToAuth,
@@ -94,7 +98,8 @@ const INITIAL_PROGRESSION = createInitialProgressionState();
 const INITIAL_SNAPSHOT: HudSnapshot = {
   phase: 'title',
   timeOfDay: 'siang',
-  timeLabel: 'Siang',
+  weather: 'sunny',
+  timeLabel: 'Siang · Cerah',
   district: 'avenue',
   districtName: DISTRICT_LABELS.avenue,
   cityId: 'liberty_metro',
@@ -141,6 +146,7 @@ const INITIAL_SNAPSHOT: HudSnapshot = {
     muted: false,
     musicEnabled: true,
     timeOfDay: 'siang',
+    weather: 'sunny',
     graphicsQuality: 'high',
   },
   activityToast: null,
@@ -409,21 +415,34 @@ export default function App() {
         .getIdToken()
         .then(async (token) => {
           setAuthIdToken(token);
-          const profile = await fetchAuthProfile(token);
+          const profile = await fetchAuthProfile(token).catch(
+            (): AuthUserProfile => ({
+              uid: user.uid,
+              email: user.email || '',
+              emailVerified: user.emailVerified,
+              displayName: user.displayName || user.email?.split('@')[0] || 'Player',
+              photoURL: user.photoURL || '',
+              role: 'student',
+            }),
+          );
           setAuthProfile(profile);
-          void syncUserProfileToFirestore(user, profile.role).catch(() => {});
+          if (user.emailVerified) {
+            void syncUserProfileToFirestore(user, profile.role).catch(() => {});
+          }
           const [publicState, accountRes] = await Promise.all([
-            fetchPublicQuizState(token),
+            fetchPublicQuizState(token).catch(() => null),
             fetchPlayerProfile(token).catch(() => null),
           ]);
-          engineRef.current?.applyPublicQuestionDatabase(
-            publicState.database,
-            publicState.progress,
-          );
-          setPublicTeacherConfig(publicState.database.teacherConfig);
-          setShopCatalog(
-            getEffectiveShopCatalog(publicState.database.teacherConfig.shopItemOverrides),
-          );
+          if (publicState) {
+            engineRef.current?.applyPublicQuestionDatabase(
+              publicState.database,
+              publicState.progress,
+            );
+            setPublicTeacherConfig(publicState.database.teacherConfig);
+            setShopCatalog(
+              getEffectiveShopCatalog(publicState.database.teacherConfig.shopItemOverrides),
+            );
+          }
           if (accountRes?.profile) {
             setPlayerProfile(accountRes.profile);
             engineRef.current?.setKnowledgePoints(accountRes.profile.knowledgePoints);
@@ -608,7 +627,7 @@ export default function App() {
     const user = authUserRef.current;
     if (code !== 'OPEN_WORLD') {
       if (!user) {
-        throw new Error('Sign in with Google before joining a classroom session.');
+        throw new Error('Sign in with your account before joining a classroom session.');
       }
       const token = await user.getIdToken();
       setAuthIdToken(token);
@@ -727,20 +746,74 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [activeSession, connectionState, phase]);
 
-  // Google Sign-In / Sign-Out Handlers
+  const hydrateSignedInSession = useCallback(async (user: User) => {
+    const token = await user.getIdToken();
+    setAuthUser(user);
+    setAuthIdToken(token);
+    const profile = await fetchAuthProfile(token).catch(
+      (): AuthUserProfile => ({
+        uid: user.uid,
+        email: user.email || '',
+        emailVerified: user.emailVerified,
+        displayName: user.displayName || user.email?.split('@')[0] || 'Player',
+        photoURL: user.photoURL || '',
+        role: 'student',
+      }),
+    );
+    setAuthProfile(profile);
+    if (user.emailVerified) {
+      void syncUserProfileToFirestore(user, profile.role).catch(() => {});
+    }
+  }, []);
+
+  // Google & Email Sign-In / Sign-Out Handlers
   const handleSignInGoogle = useCallback(async () => {
     setAuthLoading(true);
     try {
       const user = await signInWithGooglePopup();
-      const token = await user.getIdToken();
-      setAuthUser(user);
-      setAuthIdToken(token);
-      const profile = await fetchAuthProfile(token);
-      setAuthProfile(profile);
-      void syncUserProfileToFirestore(user, profile.role).catch(() => {});
+      await hydrateSignedInSession(user);
     } finally {
       setAuthLoading(false);
     }
+  }, [hydrateSignedInSession]);
+
+  const handleSignInEmail = useCallback(
+    async (email: string, password: string) => {
+      setAuthLoading(true);
+      try {
+        const user = await signInWithEmailPassword(email, password);
+        await hydrateSignedInSession(user);
+      } finally {
+        setAuthLoading(false);
+      }
+    },
+    [hydrateSignedInSession],
+  );
+
+  const handleRegisterEmail = useCallback(
+    async (email: string, password: string, displayName?: string) => {
+      setAuthLoading(true);
+      try {
+        const user = await registerWithEmailPassword(email, password, displayName);
+        await hydrateSignedInSession(user);
+      } finally {
+        setAuthLoading(false);
+      }
+    },
+    [hydrateSignedInSession],
+  );
+
+  const handleResetPassword = useCallback(async (email: string) => {
+    setAuthLoading(true);
+    try {
+      await sendFirebasePasswordReset(email);
+    } finally {
+      setAuthLoading(false);
+    }
+  }, []);
+
+  const handleResendVerification = useCallback(async () => {
+    await resendVerificationEmail();
   }, []);
 
   const handleSignOutGoogle = useCallback(async () => {
@@ -849,6 +922,10 @@ export default function App() {
 
   const handleCycleTimeOfDay = useCallback(() => {
     engineRef.current?.cycleTimeOfDay();
+  }, []);
+
+  const handleCycleWeather = useCallback(() => {
+    engineRef.current?.cycleWeather();
   }, []);
 
   const handleInteract = useCallback(() => {
@@ -1203,6 +1280,7 @@ export default function App() {
           onPause={handlePause}
           onToggleMute={handleToggleMute}
           onCycleTimeOfDay={handleCycleTimeOfDay}
+          onCycleWeather={handleCycleWeather}
           onOpenPhotoMode={handleOpenPhotoMode}
           onOpenGarage={() => setModal('garage')}
           onOpenCustomize={() => setModal('customize')}
@@ -1365,10 +1443,15 @@ export default function App() {
           guestDisplayName={guestDisplayName}
           explorationObjectives={snapshot.explorationObjectives}
           onSignInGoogle={handleSignInGoogle}
+          onSignInEmail={handleSignInEmail}
+          onRegisterEmail={handleRegisterEmail}
+          onResetPassword={handleResetPassword}
+          onResendVerification={handleResendVerification}
           onSignOut={handleSignOutGoogle}
           onUpdateGuestName={handleUpdateGuestName}
           onJoinSession={handleJoinSession}
           onLeaveSession={handleLeaveSession}
+          onOpenTeacherMode={() => void openSecretTeacherAccess()}
           onClose={() => setModal('none')}
         />
       )}
@@ -1379,6 +1462,8 @@ export default function App() {
           authProfile={authProfile}
           authLoading={authLoading}
           onSignInGoogle={handleSignInGoogle}
+          onSignInEmail={handleSignInEmail}
+          onResendVerification={handleResendVerification}
           onSignOut={handleSignOutGoogle}
           onVerified={(tok, exp) => void handlePinVerified(tok, exp)}
           onClose={() => setModal('none')}

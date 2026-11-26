@@ -1,5 +1,5 @@
 import { useEffect, useRef, type FC, type PointerEvent as ReactPointerEvent } from 'react';
-import { FolderOpen, Music, Play, Users, Volume2, VolumeX } from 'lucide-react';
+import { FolderOpen, Lock, Music, Play, Users, Volume2, VolumeX } from 'lucide-react';
 import type { User } from 'firebase/auth';
 import type { MultiplayerSessionSnapshot } from '../game/multiplayerTypes';
 
@@ -192,6 +192,19 @@ export const TitleOverlay: FC<TitleOverlayProps> = ({
                   ? 'Join Classroom Session'
                   : 'Sign In / Join Session'}
             </span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="title-teacher-btn"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onSecretTeacherTrigger();
+            }}
+            className="pointer-events-auto inline-flex items-center gap-2 px-4 py-3.5 rounded-lg bg-slate-900/90 text-amber-300 border border-amber-400/35 font-semibold text-sm sm:text-base tracking-wide shadow-lg transition-colors hover:bg-slate-800 hover:border-amber-400 focus-visible:outline-2 focus-visible:outline-amber-300 whitespace-nowrap"
+          >
+            <Lock className="w-4 h-4" />
+            <span>Teacher Mode</span>
           </button>
         </div>
       </div>

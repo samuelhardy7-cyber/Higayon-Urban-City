@@ -12,6 +12,7 @@ import type {
   SaveGameData,
   TimeOfDayPhase,
   VehicleKind,
+  WeatherPhase,
 } from './types';
 
 export const SAVE_STORAGE_KEY = 'urban_life_city_freedom_save_v1';
@@ -46,6 +47,7 @@ const VALID_VEHICLES: VehicleKind[] = [
 const VALID_OUTFITS: OutfitId[] = ['street_runner', 'urban_hoodie', 'metro_blazer', 'coast_polo'];
 const VALID_ACCESSORIES: AccessoryId[] = ['none', 'backpack', 'cap', 'shades', 'cap_backpack'];
 const VALID_TIMES: TimeOfDayPhase[] = ['pagi', 'siang', 'sore', 'malam'];
+const VALID_WEATHERS: WeatherPhase[] = ['sunny', 'rainy', 'foggy'];
 const VALID_QUALITY: GraphicsQuality[] = ['low', 'medium', 'high'];
 const VALID_DISTRICTS: DistrictId[] = ['downtown', 'residential', 'industrial', 'coastal', 'avenue'];
 
@@ -148,6 +150,10 @@ export function parseSaveData(raw: string): SaveGameData | null {
       musicEnabled:
         typeof rawSet.musicEnabled === 'boolean' ? rawSet.musicEnabled : baseSettings.musicEnabled,
       timeOfDay: VALID_TIMES.includes(rawSet.timeOfDay) ? rawSet.timeOfDay : baseSettings.timeOfDay,
+      weather:
+        rawSet.weather && VALID_WEATHERS.includes(rawSet.weather)
+          ? rawSet.weather
+          : baseSettings.weather,
       graphicsQuality: VALID_QUALITY.includes(rawSet.graphicsQuality)
         ? rawSet.graphicsQuality
         : baseSettings.graphicsQuality,

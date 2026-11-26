@@ -9,7 +9,7 @@ import type {
   QuizKioskPlacement,
 } from './questionTypes';
 import type { BuildingCategory, BuildingEntranceSpec, CityLayout, InteriorBlueprint } from './types';
-import { getGroundHeightAt } from './worldData';
+import { CITY_LAYOUT, getGroundHeightAt } from './worldData';
 
 export type AnyQuestionDatabase = QuestionDatabase | PublicQuestionDatabase;
 export type AnyQuestionRecord = QuestionRecord | PublicQuestionRecord;
@@ -57,17 +57,28 @@ export function getQuestionsForPlacement(
   db: AnyQuestionDatabase,
   category: BuildingCategory,
   floorNumber?: number | null,
+  options?: { buildingId?: string | null; scope?: 'indoor' | 'outdoor' },
 ): AnyQuestionRecord[] {
   const active = getActiveQuestions(db);
   return active.filter((q) => {
-    const catMatch = q.buildingCategory === category || q.buildingCategory === 'any';
-    if (!catMatch) return false;
+    const scope = q.placementScope || 'both';
+    if (options?.scope === 'indoor' && scope === 'outdoor') return false;
+    if (options?.scope === 'outdoor' && scope === 'indoor') return false;
+
+    const targetId = q.targetBuildingId || null;
+    if (targetId && options?.buildingId) {
+      if (targetId !== options.buildingId) return false;
+    } else {
+      const catMatch = q.buildingCategory === category || q.buildingCategory === 'any';
+      if (!catMatch) return false;
+    }
+
     if (floorNumber === undefined || floorNumber === null) return true;
     return q.floorPlacement === null || q.floorPlacement === floorNumber;
   });
 }
 
-interface OutdoorKioskAnchor {
+export interface OutdoorKioskAnchor {
   id: string;
   label: string;
   x: number;
@@ -76,7 +87,7 @@ interface OutdoorKioskAnchor {
   category: PlacementCategory;
 }
 
-const OUTDOOR_KIOSK_ANCHORS: OutdoorKioskAnchor[] = [
+export const OUTDOOR_KIOSK_ANCHORS: OutdoorKioskAnchor[] = [
   {
     id: 'kiosk_avenue_hub',
     label: 'City Avenue Knowledge Hub',
@@ -119,6 +130,53 @@ const OUTDOOR_KIOSK_ANCHORS: OutdoorKioskAnchor[] = [
   },
 ];
 
+export interface PlacementTargetOption {
+  id: string;
+  label: string;
+  category: PlacementCategory;
+  kind: 'outdoor_kiosk' | 'building';
+}
+
+export function getPlacementTargetOptions(layout: CityLayout = CITY_LAYOUT): {
+  outdoorKiosks: PlacementTargetOption[];
+  buildings: PlacementTargetOption[];
+} {
+  const outdoorKiosks: PlacementTargetOption[] = OUTDOOR_KIOSK_ANCHORS.map((a) => ({
+    id: a.id,
+    label: a.label,
+    category: a.category,
+    kind: 'outdoor_kiosk',
+  }));
+
+  const seenBuildingIds = new Set<string>();
+  const buildings: PlacementTargetOption[] = [];
+  for (const ent of layout.entrances) {
+    if (seenBuildingIds.has(ent.buildingId)) continue;
+    seenBuildingIds.add(ent.buildingId);
+    buildings.push({
+      id: ent.buildingId,
+      label: ent.name,
+      category: ent.category,
+      kind: 'building',
+    });
+  }
+  buildings.sort((a, b) => a.label.localeCompare(b.label));
+
+  return { outdoorKiosks, buildings };
+}
+
+export function getPlacementTargetLabel(
+  targetId: string | null | undefined,
+  layout: CityLayout = CITY_LAYOUT,
+): string | null {
+  if (!targetId) return null;
+  const kiosk = OUTDOOR_KIOSK_ANCHORS.find((a) => a.id === targetId);
+  if (kiosk) return kiosk.label;
+  const entrance = layout.entrances.find((e) => e.buildingId === targetId);
+  if (entrance) return entrance.name;
+  return targetId;
+}
+
 export function createOutdoorKioskPlacements(
   db: AnyQuestionDatabase,
   progress: PlayerQuizProgress,
@@ -129,12 +187,19 @@ export function createOutdoorKioskPlacements(
 
   const placements: QuizKioskPlacement[] = [];
   for (const anchor of OUTDOOR_KIOSK_ANCHORS) {
-    const matched =
-      anchor.category === 'any'
-        ? active
-        : active.filter(
-            (q) => q.buildingCategory === anchor.category || q.buildingCategory === 'any',
-          );
+    const matched = active.filter((q) => {
+      const scope = q.placementScope || 'both';
+      if (scope === 'indoor') return false;
+      const targetId = q.targetBuildingId || null;
+      if (targetId) {
+        return targetId === anchor.id;
+      }
+      return (
+        anchor.category === 'any' ||
+        q.buildingCategory === anchor.category ||
+        q.buildingCategory === 'any'
+      );
+    });
     if (matched.length === 0) continue;
 
     const picked = pickNextUnanswered(matched, progress);
@@ -287,18 +352,37 @@ export function createInteriorKioskPlacements(
   );
 
   for (const floorNum of floorNumbers) {
-    const exactQuestions = active.filter((q) => {
-      const catMatch = q.buildingCategory === entrance.category;
+    const indoorEligible = active.filter((q) => {
+      const scope = q.placementScope || 'both';
+      if (scope === 'outdoor') return false;
+      const targetId = q.targetBuildingId || null;
+      if (targetId && targetId !== entrance.buildingId) return false;
+      return true;
+    });
+
+    const targetedForBuilding = indoorEligible.filter((q) => {
+      const targetMatch = q.targetBuildingId === entrance.buildingId;
       const floorMatch =
         q.floorPlacement === floorNum || (q.floorPlacement === null && floorNum === 1);
-      return catMatch && floorMatch;
+      return targetMatch && floorMatch;
     });
+
+    const exactQuestions =
+      targetedForBuilding.length > 0
+        ? targetedForBuilding
+        : indoorEligible.filter((q) => {
+            const catMatch = q.buildingCategory === entrance.category;
+            const floorMatch =
+              q.floorPlacement === floorNum || (q.floorPlacement === null && floorNum === 1);
+            return catMatch && floorMatch;
+          });
 
     const fallbackAnyCat =
       exactQuestions.length > 0
         ? exactQuestions
-        : active.filter(
+        : indoorEligible.filter(
             (q) =>
+              !q.targetBuildingId &&
               q.buildingCategory === 'any' &&
               (q.floorPlacement === floorNum || (q.floorPlacement === null && floorNum === 1)),
           );

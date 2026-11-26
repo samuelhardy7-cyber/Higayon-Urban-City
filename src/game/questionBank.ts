@@ -632,6 +632,8 @@ export function toPlayerQuestion(
     points: resolveQuestionKpReward(question, db.teacherConfig),
     buildingCategory: question.buildingCategory,
     floorPlacement: question.floorPlacement,
+    placementScope: question.placementScope || 'both',
+    targetBuildingId: question.targetBuildingId ?? null,
     questionSetName: qSet?.name || 'City Quiz',
     allowRetry: db.teacherConfig.allowRetryOnWrong,
     alreadyCompleted: progress.completedQuestionIds.includes(question.id),
@@ -951,6 +953,20 @@ function normalizeFloorPlacement(raw: unknown): FloorPlacement {
   return null;
 }
 
+function normalizePlacementScope(raw: unknown): 'both' | 'indoor' | 'outdoor' {
+  const s = String(raw || '').trim().toLowerCase();
+  if (s === 'indoor' || s === 'outdoor') return s;
+  return 'both';
+}
+
+function normalizeTargetBuildingId(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  const cleaned = String(raw).trim();
+  if (!cleaned || cleaned.toLowerCase() === 'any') return null;
+  if (/^[a-zA-Z0-9_-]{1,64}$/.test(cleaned)) return cleaned;
+  return null;
+}
+
 export function parseBulkImport(
   rawText: string,
   format: 'csv' | 'json',
@@ -1040,6 +1056,8 @@ export function parseBulkImport(
     const pointsRaw = obj.points !== undefined && String(obj.points).trim() !== '' ? Number(obj.points) : 20;
     const buildingCategory = normalizeBuildingCategory(obj.buildingCategory);
     const floorPlacement = normalizeFloorPlacement(obj.floorPlacement);
+    const placementScope = normalizePlacementScope(obj.placementScope);
+    const targetBuildingId = normalizeTargetBuildingId(obj.targetBuildingId);
 
     const matchedSubj = db.subjects.find(
       (s) =>
@@ -1064,6 +1082,8 @@ export function parseBulkImport(
       points: Number.isFinite(pointsRaw) ? Math.round(pointsRaw) : NaN,
       buildingCategory,
       floorPlacement,
+      placementScope,
+      targetBuildingId,
       questionSetId: String(obj.questionSetId || targetSetId || db.questionSets[0]?.id || 'set_city_core'),
     };
 
@@ -1148,6 +1168,8 @@ export function commitImportedDrafts(
       points: Math.round(draft.points),
       buildingCategory: draft.buildingCategory,
       floorPlacement: draft.floorPlacement,
+      placementScope: draft.placementScope || 'both',
+      targetBuildingId: draft.targetBuildingId ?? null,
       questionSetId: draft.questionSetId,
       status: draft.status || 'active',
       createdAt: now,

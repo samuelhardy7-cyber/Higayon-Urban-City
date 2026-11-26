@@ -18,6 +18,7 @@ export interface BuiltCity {
   lampBulbMat: THREE.MeshStandardMaterial;
   windowGlowMat: THREE.MeshStandardMaterial;
   buildingWindowMats: THREE.MeshStandardMaterial[];
+  roadMat: THREE.MeshStandardMaterial;
   exteriorDoors: Map<string, ExteriorDoorRig>;
   updateEnvironment: (elapsedTime: number) => void;
   dispose: () => void;
@@ -116,23 +117,146 @@ export function buildCityScene(
   const skyDome = new THREE.Mesh(skyGeo, skyMat);
   group.add(skyDome);
 
-  // 2. Global Ocean Surface, Deep Seabed, Island Land Bases, Distant Mainland & Hills
+  // 2. Global Ocean Surface (subdivided + shader waves + scrolling bump/currents), Deep Seabed, Island Land Bases
+  const bayShaderUniforms = {
+    uTime: { value: 0 },
+  };
   const bayMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: 0x16749a,
-      roughness: 0.14,
+      color: 0x0b4f71,
+      roughness: 0.11,
       metalness: 0.28,
+      bumpMap: enableShadows ? textures.waterBumpMap : null,
+      bumpScale: 0.24,
       transparent: true,
-      opacity: 0.78,
+      opacity: 0.9,
       side: THREE.DoubleSide,
       depthWrite: false,
     }),
   );
-  const bayWater = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(2200, 2200, 1, 1)), bayMat);
+  bayMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = bayShaderUniforms.uTime;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         uniform float uTime;
+         varying vec3 vWaterWorldPos;
+         varying float vWaterCrest;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vec4 waterWp = modelMatrix * vec4(transformed, 1.0);
+         float w1 = sin(waterWp.x * 0.085 + uTime * 1.45) * 0.085;
+         float w2 = cos(waterWp.z * 0.11 - uTime * 1.25) * 0.07;
+         float w3 = sin((waterWp.x * 0.17 + waterWp.z * 0.13) + uTime * 2.15) * 0.042;
+         float waveH = w1 + w2 + w3;
+         transformed.z += waveH;
+         vWaterWorldPos = waterWp.xyz;
+         vWaterCrest = waveH;`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         uniform float uTime;
+         varying vec3 vWaterWorldPos;
+         varying float vWaterCrest;`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+         float inEastChannel = step(93.0, vWaterWorldPos.x) * step(vWaterWorldPos.x, 236.0) * step(-115.0, vWaterWorldPos.z) * step(vWaterWorldPos.z, 115.0);
+         float inNSStrait = step(-115.0, vWaterWorldPos.x) * step(vWaterWorldPos.x, 115.0) * (step(-220.0, vWaterWorldPos.z) * step(vWaterWorldPos.z, -93.0) + step(93.0, vWaterWorldPos.z) * step(vWaterWorldPos.z, 220.0));
+         float flowA = sin(vWaterWorldPos.x * 0.34 - uTime * (1.55 + inNSStrait * 0.95) + sin(vWaterWorldPos.z * 0.22 + uTime * 1.1) * 1.35);
+         float flowB = sin(vWaterWorldPos.z * 0.42 - uTime * (1.85 + inEastChannel * 1.05) + cos(vWaterWorldPos.x * 0.27 - uTime * 0.9) * 1.2);
+         float ripple = clamp((flowA + flowB) * 0.25 + 0.5, 0.0, 1.0);
+         float crestFactor = smoothstep(0.02, 0.15, vWaterCrest);
+         vec3 deepTint = vec3(0.005, 0.065, 0.155);
+         vec3 crestTint = vec3(0.018, 0.19, 0.29);
+         vec3 foamTint = vec3(0.55, 0.82, 0.92);
+         vec3 waterBase = mix(deepTint, crestTint, ripple * 0.52 + crestFactor * 0.48);
+         float sparkle = pow(max(0.0, flowA * flowB), 3.0) * 0.34 + crestFactor * 0.16;
+         diffuseColor.rgb = mix(waterBase, foamTint, clamp(sparkle, 0.0, 0.42));`,
+      );
+  };
+  const waterSegs = enableShadows ? 64 : 24;
+  const bayWater = new THREE.Mesh(
+    trackGeo(new THREE.PlaneGeometry(2200, 2200, waterSegs, waterSegs)),
+    bayMat,
+  );
   bayWater.rotation.x = -Math.PI / 2;
   bayWater.position.set(140, WATER_SURFACE_Y, 0);
   bayWater.receiveShadow = enableShadows;
   group.add(bayWater);
+
+  // Flowing Directional Strait & Channel Current Ribbons + Coastal Breaking Surf Waves
+  const channelFoamTex = trackTex(textures.waterFoamMap.clone());
+  channelFoamTex.repeat.set(1.6, 5.5);
+  channelFoamTex.needsUpdate = true;
+  const channelCurrentMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      map: channelFoamTex,
+      color: 0xdff7ff,
+      transparent: true,
+      opacity: 0.36,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: true,
+    }),
+  );
+
+  // East Harbor Channel (flowing under Grand Harbor Bridge past Lighthouse & Beach)
+  for (const cx of [124, 152, 182, 210]) {
+    const ribbon = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(18, 220, 1, 1)), channelCurrentMat);
+    ribbon.rotation.x = -Math.PI / 2;
+    ribbon.position.set(cx, WATER_SURFACE_Y + 0.06, 0);
+    group.add(ribbon);
+  }
+  // North Skyway Strait & South Sunset Strait (east-west flowing channels under bridges)
+  for (const sz of [-182, -152, -122, 122, 152, 182]) {
+    const ribbon = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(16, 210, 1, 1)), channelCurrentMat);
+    ribbon.rotation.x = -Math.PI / 2;
+    ribbon.rotation.z = Math.PI * 0.5;
+    ribbon.position.set(0, WATER_SURFACE_Y + 0.06, sz);
+    group.add(ribbon);
+  }
+
+  // Coastal Surf Wave Foam Bands washing gently onto sandy beaches
+  const shoreFoamTex = trackTex(textures.waterFoamMap.clone());
+  shoreFoamTex.repeat.set(1.0, 5.0);
+  shoreFoamTex.needsUpdate = true;
+  const shoreWaveBands: Array<{
+    mesh: THREE.Mesh;
+    mat: THREE.MeshBasicMaterial;
+    baseX: number;
+    phase: number;
+    dir: number;
+  }> = [];
+  const shoreDefs: Array<[number, number, number, number, number]> = [
+    [108.5, 50.75, 86, 0.0, 1],
+    [112.2, 50.75, 84, Math.PI * 0.85, 1],
+    [225.2, 12.0, 110, 1.3, -1],
+  ];
+  for (const [bx, bz, len, phase, dir] of shoreDefs) {
+    const smat = trackMat(
+      new THREE.MeshBasicMaterial({
+        map: shoreFoamTex,
+        color: 0xeafaff,
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        fog: true,
+      }),
+    );
+    const smesh = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(2.2, len, 1, 1)), smat);
+    smesh.rotation.x = -Math.PI / 2;
+    smesh.position.set(bx, WATER_SURFACE_Y + 0.085, bz);
+    group.add(smesh);
+    shoreWaveBands.push({ mesh: smesh, mat: smat, baseX: bx, phase, dir });
+  }
 
   // Sandy Deep Ocean Floor (y = OCEAN_SEABED_Y = -13.5)
   const seabedSandMat = trackMat(
@@ -2354,12 +2478,28 @@ export function buildCityScene(
     group.add(mesh);
   }
 
-  // 10. Fountains
+  // 10. Fountains (flowing ripple water surface + animated vertical jet plume)
   const stoneMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xc9c4b9, roughness: 0.78 }));
   const fountainWaterMat = trackMat(
-    new THREE.MeshStandardMaterial({ color: 0x3f98bf, roughness: 0.12, metalness: 0.25 }),
+    new THREE.MeshStandardMaterial({
+      color: 0x52b6dc,
+      map: textures.fountainRippleMap,
+      bumpMap: textures.waterBumpMap,
+      bumpScale: 0.08,
+      roughness: 0.1,
+      metalness: 0.25,
+    }),
   );
-  for (const f of layout.fountains) {
+  const fountainJetMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xdff7ff,
+      transparent: true,
+      opacity: 0.68,
+    }),
+  );
+  const fountainJets: Array<{ plume: THREE.Mesh; crown: THREE.Mesh; phase: number }> = [];
+  for (let fi = 0; fi < layout.fountains.length; fi++) {
+    const f = layout.fountains[fi];
     const fg = new THREE.Group();
     fg.position.set(f.x, f.y, f.z);
     const rim = new THREE.Mesh(
@@ -2376,7 +2516,19 @@ export function buildCityScene(
     ped.position.y = 0.9;
     const bowl = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(1.35, 0.55, 0.45, 16)), stoneMat);
     bowl.position.y = 1.8;
-    fg.add(rim, water, ped, bowl);
+    const plume = new THREE.Mesh(
+      trackGeo(new THREE.CylinderGeometry(0.14, 0.28, 1.45, 10)),
+      fountainJetMat,
+    );
+    plume.position.y = 2.65;
+    const crown = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(0.38, 0.08, 8, 16)),
+      fountainJetMat,
+    );
+    crown.rotation.x = Math.PI * 0.5;
+    crown.position.y = 3.25;
+    fountainJets.push({ plume, crown, phase: fi * 1.15 });
+    fg.add(rim, water, ped, bowl, plume, crown);
     group.add(fg);
   }
 
@@ -2983,8 +3135,33 @@ export function buildCityScene(
     lampBulbMat,
     windowGlowMat,
     buildingWindowMats,
+    roadMat,
     exteriorDoors,
     updateEnvironment: (elapsedTime: number) => {
+      bayShaderUniforms.uTime.value = elapsedTime;
+      textures.waterBumpMap.offset.x = (elapsedTime * 0.045) % 1;
+      textures.waterBumpMap.offset.y = -(elapsedTime * 0.075) % 1;
+      channelFoamTex.offset.y = -(elapsedTime * 0.32) % 1;
+      channelFoamTex.offset.x = Math.sin(elapsedTime * 0.4) * 0.08;
+      shoreFoamTex.offset.y = (elapsedTime * 0.12) % 1;
+
+      for (let i = 0; i < shoreWaveBands.length; i++) {
+        const sw = shoreWaveBands[i];
+        const surge = Math.sin(elapsedTime * 1.45 + sw.phase);
+        sw.mesh.position.x = sw.baseX - sw.dir * surge * 2.2;
+        sw.mat.opacity = 0.22 + (0.5 + 0.5 * surge) * 0.36;
+      }
+      for (let i = 0; i < animatedWaterMeshes.length; i++) {
+        animatedWaterMeshes[i].rotation.z = elapsedTime * 0.32 + i * 0.8;
+      }
+      for (let i = 0; i < fountainJets.length; i++) {
+        const fj = fountainJets[i];
+        const p = Math.sin(elapsedTime * 4.8 + fj.phase);
+        fj.plume.scale.set(1 + p * 0.12, 0.92 + p * 0.14, 1 + p * 0.12);
+        fj.crown.scale.setScalar(0.88 + (0.5 + 0.5 * p) * 0.36);
+        fj.crown.position.y = 3.18 + p * 0.16;
+      }
+
       for (let r = 0; r < atcRadars.length; r++) {
         atcRadars[r].rotation.y = elapsedTime * 1.4 + r * 0.8;
       }

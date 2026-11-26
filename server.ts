@@ -15,6 +15,7 @@ import {
   PUBLIC_OPEN_WORLD_SESSION_ID,
   PinRateLimiter,
   TeacherTokenManager,
+  resolveCallerAuthorization,
 } from './src/server/securityCore';
 
 interface FirebaseAppletConfig {
@@ -122,18 +123,19 @@ async function startServer() {
   // --- Auth Role Inspection ---
   app.get('/api/auth/me', async (req, res) => {
     const caller = await verifyFirebaseBearer(req.headers.authorization);
-    if (!caller || !caller.emailVerified) {
+    if (!caller) {
       res.status(401).json({ error: 'Unauthenticated' });
       return;
     }
-    const isTeacher = store.isTeacherEmail(caller.email);
+    const authz = resolveCallerAuthorization(caller, store);
     res.json({
       uid: caller.uid,
       email: caller.email,
+      emailVerified: caller.emailVerified,
       displayName: caller.displayName,
       photoURL: caller.photoURL,
-      role: isTeacher ? 'teacher' : 'student',
-      isBootstrappedTeacher: caller.email === BOOTSTRAPPED_TEACHER_EMAIL,
+      role: authz.role,
+      isBootstrappedTeacher: authz.isBootstrappedTeacher,
     });
   });
 
@@ -209,8 +211,8 @@ async function startServer() {
 
   app.get('/api/player/profile', async (req, res) => {
     const caller = await verifyFirebaseBearer(req.headers.authorization);
-    if (!caller || !caller.emailVerified) {
-      res.status(401).json({ error: 'Sign in with Google to synchronize your Knowledge Points & Reward Inventory.' });
+    if (!caller) {
+      res.status(401).json({ error: 'Sign in with your account to synchronize Knowledge Points & Reward Inventory.' });
       return;
     }
     const profile = store.getOrCreatePlayerProfile(caller.uid, caller.displayName);
@@ -219,8 +221,8 @@ async function startServer() {
 
   app.post('/api/shop/purchase', async (req, res) => {
     const caller = await verifyFirebaseBearer(req.headers.authorization);
-    if (!caller || !caller.emailVerified) {
-      res.status(401).json({ error: 'Please sign in with Google to purchase and save items to your account.' });
+    if (!caller) {
+      res.status(401).json({ error: 'Please sign in to purchase and save items to your account.' });
       return;
     }
     const { itemId, txId, equipImmediately } = req.body as {
@@ -270,8 +272,8 @@ async function startServer() {
 
   app.put('/api/player/customization', async (req, res) => {
     const caller = await verifyFirebaseBearer(req.headers.authorization);
-    if (!caller || !caller.emailVerified) {
-      res.status(401).json({ error: 'Google sign-in required to save character customization.' });
+    if (!caller) {
+      res.status(401).json({ error: 'Account sign-in required to save character customization.' });
       return;
     }
     const { itemId, patch } = req.body as {
@@ -306,7 +308,7 @@ async function startServer() {
 
   app.post('/api/player/progress-sync', async (req, res) => {
     const caller = await verifyFirebaseBearer(req.headers.authorization);
-    if (!caller || !caller.emailVerified) {
+    if (!caller) {
       res.status(401).json({ error: 'Unauthenticated' });
       return;
     }
@@ -580,8 +582,8 @@ async function startServer() {
   // --- Student Session Lookup & Join Check (Authenticated Firebase account required) ---
   app.post('/api/sessions/join-check', async (req, res) => {
     const caller = await verifyFirebaseBearer(req.headers.authorization);
-    if (!caller || !caller.emailVerified) {
-      res.status(401).json({ error: 'Please sign in with Google before joining a classroom session.' });
+    if (!caller) {
+      res.status(401).json({ error: 'Please sign in before joining a classroom session.' });
       return;
     }
     const { joinCode } = req.body as { joinCode?: string };
@@ -627,13 +629,13 @@ async function startServer() {
         const isPublicOpenWorld = requestedCode === PUBLIC_OPEN_WORLD_CODE;
 
         const caller = msg.token ? await verifyFirebaseIdToken(msg.token) : null;
-        const verifiedCaller = caller && caller.emailVerified ? caller : null;
+        const verifiedCaller = caller;
 
         if (!verifiedCaller && !isPublicOpenWorld) {
           sendWs(ws, {
             type: 'session:error',
             code: 'UNAUTHORIZED',
-            message: 'Verified Google login is required to join classroom sessions.',
+            message: 'Account sign-in is required to join classroom sessions.',
           });
           ws.close(4001, 'Unauthorized');
           return;

@@ -384,28 +384,40 @@ export function stepPlayerPhysics(
 
 export function resolvePlayerVsNpcs(
   state: PlayerState,
-  npcs: Array<{ x: number; y: number; z: number }>,
+  npcs: Array<{ x: number; y: number; z: number; activity?: string }>,
   npcRadius = 0.36,
+  options?: { playerYieldWeight?: number },
 ): void {
+  if (state.activeLadderId) return;
   const minDist = PLAYER_RADIUS + npcRadius;
   const minDistSq = minDist * minDist;
+  const basePlayerWeight = Math.max(0, Math.min(1, options?.playerYieldWeight ?? 0.25));
 
   for (let i = 0; i < npcs.length; i++) {
     const npc = npcs[i];
-    if (Math.abs(state.y - npc.y) > 1.4) continue;
+    if (Math.abs(state.y - npc.y) > 1.35) continue;
     const dx = state.x - npc.x;
     const dz = state.z - npc.z;
     const dSq = dx * dx + dz * dz;
     if (dSq < minDistSq) {
-      if (dSq > 1e-6) {
-        const d = Math.sqrt(dSq);
-        const push = minDist - d;
-        state.x += (dx / d) * push;
-        state.z += (dz / d) * push;
-      } else {
-        state.x += minDist;
+      const nx = dSq > 1e-6 ? dx / Math.sqrt(dSq) : 1;
+      const nz = dSq > 1e-6 ? dz / Math.sqrt(dSq) : 0;
+      const d = dSq > 1e-6 ? Math.sqrt(dSq) : 0;
+      const push = minDist - d;
+
+      // Seated NPCs are anchored to furniture; standing/walking NPCs yield majority of space to player
+      const isSeated = npc.activity === 'sitting';
+      const pWeight = isSeated ? Math.max(0.55, basePlayerWeight) : basePlayerWeight;
+      const nWeight = 1 - pWeight;
+
+      state.x += nx * push * pWeight;
+      state.z += nz * push * pWeight;
+      if (!isSeated && nWeight > 0) {
+        npc.x -= nx * push * nWeight;
+        npc.z -= nz * push * nWeight;
       }
     }
   }
 }
+
 

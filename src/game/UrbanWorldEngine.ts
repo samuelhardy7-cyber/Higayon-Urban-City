@@ -58,7 +58,13 @@ import type {
   PlayerMovementState,
   RemotePlayerState,
 } from './multiplayerTypes';
-import { createInitialNpcs, stepNpcs } from './npcSystem';
+import {
+  createInitialNpcs,
+  createInteriorNpcs,
+  NPC_RADIUS,
+  stepInteriorNpcs,
+  stepNpcs,
+} from './npcSystem';
 import {
   createEmptyInput,
   createInitialPlayerState,
@@ -141,7 +147,14 @@ import type {
 } from './questionTypes';
 import { createQuizKioskRig, type QuizKioskRig } from './quizKioskMesh';
 import { createCityTextures, type CityTextures } from './textures';
-import { nextTimeOfDay, TIME_PRESETS } from './timeOfDay';
+import {
+  computeEffectiveAtmosphere,
+  formatTimeWeatherLabel,
+  nextTimeOfDay,
+  nextWeather,
+  stepWeatherCycle,
+  WEATHER_PRESETS,
+} from './timeOfDay';
 import { stepTrafficAndPolice } from './trafficSystem';
 import type {
   AccessoryId,
@@ -171,6 +184,7 @@ import type {
   VehicleKind,
   VehicleState,
   VehicleUpgradeLevels,
+  WeatherPhase,
 } from './types';
 import { createInitialVehicles, VEHICLE_SPECS } from './vehicleData';
 import {
@@ -376,6 +390,8 @@ export class UrbanWorldEngine {
   private explorationTracker: ExplorationTrackerState = createInitialExplorationTracker();
   private npcs: NpcState[];
   private npcRigs: NpcRig[] = [];
+  private interiorNpcs: NpcState[] = [];
+  private interiorNpcRigs: NpcRig[] = [];
 
   private vehicles: VehicleState[] = [];
   private vehicleRigs: VehicleRig[] = [];
@@ -472,6 +488,32 @@ export class UrbanWorldEngine {
   private drivingInput: DrivingInputState = createEmptyDrivingInput();
   private phase: GamePhase = 'title';
   private timeOfDay: TimeOfDayPhase = 'siang';
+  private weather: WeatherPhase = 'sunny';
+  private weatherCycleTimer = 0;
+  private weatherRainStrength = 0;
+  private weatherMistStrength = 0;
+  private weatherEffectsGroup!: THREE.Group;
+  private rainLineSegments!: THREE.LineSegments;
+  private rainPositions!: Float32Array;
+  private rainMat!: THREE.LineBasicMaterial;
+  private rainSplashes: Array<{
+    mesh: THREE.Mesh;
+    life: number;
+    maxLife: number;
+    localX: number;
+    localY: number;
+    localZ: number;
+  }> = [];
+  private rainSplashMat!: THREE.MeshBasicMaterial;
+  private mistPlanes: Array<{
+    mesh: THREE.Mesh;
+    mat: THREE.MeshBasicMaterial;
+    baseOffsetX: number;
+    baseOffsetZ: number;
+    baseY: number;
+    speed: number;
+    phase: number;
+  }> = [];
   private sunOffset = new THREE.Vector3(52, 86, 42);
 
   // Camera follow smoothing vectors (zero-GC pre-allocated)
@@ -576,6 +618,8 @@ export class UrbanWorldEngine {
     this.contactShadowTex = textures.contactShadowMap;
     this.builtCity = buildCityScene(CITY_LAYOUT, textures, !this.isSoftwareGl);
     this.scene.add(this.builtCity.group);
+
+    this.createWeatherEffects();
 
     this.skyLifeState = createSkyLifeState();
     this.skyLifeRig = buildSkyLifeVisuals(this.skyLifeState);
@@ -778,7 +822,27 @@ export class UrbanWorldEngine {
     this.setupListeners();
     this.setPhase(autostart ? 'playing' : 'title', true);
     if (autostart) {
-      this.snapCameraBehindPlayer();
+      const params =
+        typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const enterId = params?.get('enter');
+      const spawnPreset = params?.get('spawn');
+      const enterTarget = enterId
+        ? CITY_LAYOUT.entrances.find((e) => e.buildingId === enterId)
+        : undefined;
+      if (enterTarget) {
+        this.swapToInterior(enterTarget);
+      } else if (spawnPreset === 'coast') {
+        this.playerState.x = 112.0;
+        this.playerState.z = 42.0;
+        this.playerState.y = getGroundHeightAt(112.0, 42.0, CITY_LAYOUT);
+        this.playerState.yaw = -Math.PI * 0.5;
+        this.playerState.cameraYaw = -Math.PI * 0.5;
+        this.playerState.cameraPitch = 0.24;
+        animateCharacterRig(this.playerRig, this.playerState, this.playerState.y, 0);
+        this.snapCameraBehindPlayer();
+      } else {
+        this.snapCameraBehindPlayer();
+      }
     } else {
       this.updateTitleCamera(0);
     }
@@ -788,8 +852,220 @@ export class UrbanWorldEngine {
     this.startLoop();
   }
 
+  private createWeatherEffects(): void {
+    const group = new THREE.Group();
+    const disposables: Array<{ dispose: () => void }> = [];
+
+    // 1. Pre-allocated 3D Rain Streaks (900 streaks around camera/player)
+    const dropCount = 900;
+    const positions = new Float32Array(dropCount * 6);
+    for (let i = 0; i < dropCount; i++) {
+      const rx = (Math.random() - 0.5) * 52;
+      const ry = Math.random() * 28;
+      const rz = (Math.random() - 0.5) * 52;
+      const len = 1.15 + Math.random() * 0.65;
+      const idx = i * 6;
+      positions[idx] = rx;
+      positions[idx + 1] = ry;
+      positions[idx + 2] = rz;
+      positions[idx + 3] = rx - 0.1;
+      positions[idx + 4] = ry + len;
+      positions[idx + 5] = rz - 0.05;
+    }
+    const rainGeo = new THREE.BufferGeometry();
+    rainGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const rainMat = new THREE.LineBasicMaterial({
+      color: 0xcbe4ff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const rainLines = new THREE.LineSegments(rainGeo, rainMat);
+    rainLines.frustumCulled = false;
+    group.add(rainLines);
+    disposables.push(rainGeo, rainMat);
+
+    // 2. Pooled ground/water rain splash rings
+    const splashGeo = new THREE.RingGeometry(0.08, 0.24, 12);
+    splashGeo.rotateX(-Math.PI / 2);
+    const splashMat = new THREE.MeshBasicMaterial({
+      color: 0xdbeafe,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    disposables.push(splashGeo, splashMat);
+    for (let i = 0; i < 36; i++) {
+      const sm = new THREE.Mesh(splashGeo, splashMat);
+      sm.visible = false;
+      group.add(sm);
+      this.rainSplashes.push({
+        mesh: sm,
+        life: Math.random() * 0.45,
+        maxLife: 0.35 + Math.random() * 0.25,
+        localX: (Math.random() - 0.5) * 30,
+        localY: 0.06,
+        localZ: (Math.random() - 0.5) * 30,
+      });
+    }
+
+    // 3. Soft procedural radial mist texture & drifting atmospheric fog planes
+    const mistCanvas = document.createElement('canvas');
+    mistCanvas.width = 128;
+    mistCanvas.height = 128;
+    const mCtx = mistCanvas.getContext('2d');
+    if (mCtx) {
+      const grad = mCtx.createRadialGradient(64, 64, 6, 64, 64, 64);
+      grad.addColorStop(0, 'rgba(226, 236, 248, 0.72)');
+      grad.addColorStop(0.55, 'rgba(210, 224, 240, 0.28)');
+      grad.addColorStop(1, 'rgba(210, 224, 240, 0.0)');
+      mCtx.fillStyle = grad;
+      mCtx.fillRect(0, 0, 128, 128);
+    }
+    const mistTex = new THREE.CanvasTexture(mistCanvas);
+    mistTex.colorSpace = THREE.SRGBColorSpace;
+    const mistGeo = new THREE.PlaneGeometry(38, 14);
+    disposables.push(mistTex, mistGeo);
+
+    for (let i = 0; i < 12; i++) {
+      const mistMat = new THREE.MeshBasicMaterial({
+        map: mistTex,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      disposables.push(mistMat);
+      const mesh = new THREE.Mesh(mistGeo, mistMat);
+      const angle = (i / 12) * Math.PI * 2;
+      const dist = 24 + (i % 3) * 14;
+      const bx = Math.cos(angle) * dist;
+      const bz = Math.sin(angle) * dist;
+      const by = 4.2 + (i % 4) * 2.2;
+      mesh.position.set(bx, by, bz);
+      mesh.rotation.y = angle + Math.PI * 0.5;
+      group.add(mesh);
+      this.mistPlanes.push({
+        mesh,
+        mat: mistMat,
+        baseOffsetX: bx,
+        baseOffsetZ: bz,
+        baseY: by,
+        speed: 0.22 + (i % 3) * 0.09,
+        phase: i * 1.15,
+      });
+    }
+
+    group.visible = false;
+    this.scene.add(group);
+    this.weatherEffectsGroup = group;
+    this.rainLineSegments = rainLines;
+    this.rainPositions = positions;
+    this.rainMat = rainMat;
+    this.rainSplashMat = splashMat;
+    this.disposeCallbacks.push(() => {
+      disposables.forEach((d) => d.dispose());
+    });
+  }
+
+  private updateWeatherEffects(dt: number, cameraSubmerged: boolean): void {
+    if (!this.weatherEffectsGroup) return;
+    if (this.activeBlueprint || cameraSubmerged) {
+      this.weatherEffectsGroup.visible = false;
+      return;
+    }
+
+    const active = this.weatherRainStrength > 0.02 || this.weatherMistStrength > 0.02;
+    this.weatherEffectsGroup.visible = active;
+    if (!active) return;
+
+    const anchorX = this.camera.position.x;
+    const anchorZ = this.camera.position.z;
+    const baseY = Math.max(WATER_SURFACE_Y, this.playerState.y) - 2;
+    this.weatherEffectsGroup.position.set(anchorX, 0, anchorZ);
+
+    // Rain streaks + ground splashes
+    const showRain = this.weatherRainStrength > 0.02;
+    this.rainLineSegments.visible = showRain;
+    this.rainMat.opacity = this.weatherRainStrength * 0.72;
+    this.rainSplashMat.opacity = this.weatherRainStrength * 0.54;
+
+    if (showRain) {
+      const posAttr = this.rainLineSegments.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const arr = this.rainPositions;
+      const dropVy = 36 * dt;
+      const dropVx = -2.8 * dt;
+      const dropVz = -1.3 * dt;
+      const maxH = baseY + 26;
+      const minH = baseY - 1.2;
+
+      for (let i = 0; i < arr.length; i += 6) {
+        arr[i] += dropVx;
+        arr[i + 1] -= dropVy;
+        arr[i + 2] += dropVz;
+        arr[i + 3] += dropVx;
+        arr[i + 4] -= dropVy;
+        arr[i + 5] += dropVz;
+
+        if (arr[i + 1] < minH) {
+          const rx = (Math.random() - 0.5) * 52;
+          const ry = maxH - Math.random() * 4;
+          const rz = (Math.random() - 0.5) * 52;
+          const len = 1.15 + Math.random() * 0.65;
+          arr[i] = rx;
+          arr[i + 1] = ry;
+          arr[i + 2] = rz;
+          arr[i + 3] = rx - 0.1;
+          arr[i + 4] = ry + len;
+          arr[i + 5] = rz - 0.05;
+        }
+      }
+      posAttr.needsUpdate = true;
+
+      for (let i = 0; i < this.rainSplashes.length; i++) {
+        const sp = this.rainSplashes[i];
+        sp.life += dt;
+        if (sp.life >= sp.maxLife) {
+          sp.life = 0;
+          sp.localX = (Math.random() - 0.5) * 32;
+          sp.localZ = (Math.random() - 0.5) * 32;
+          const gy = getGroundHeightAt(anchorX + sp.localX, anchorZ + sp.localZ, CITY_LAYOUT);
+          const water = getWaterInfoAt(anchorX + sp.localX, anchorZ + sp.localZ, gy, CITY_LAYOUT);
+          sp.localY = (water.inWater ? Math.max(gy, WATER_SURFACE_Y) : gy) + 0.05;
+        }
+        const t = sp.life / sp.maxLife;
+        const sc = 0.4 + t * 1.45;
+        sp.mesh.visible = true;
+        sp.mesh.position.set(sp.localX, sp.localY, sp.localZ);
+        sp.mesh.scale.set(sc, 1, sc);
+      }
+    } else {
+      for (let i = 0; i < this.rainSplashes.length; i++) {
+        this.rainSplashes[i].mesh.visible = false;
+      }
+    }
+
+    // Drifting atmospheric mist wisps (high impact in foggy weather, subtle in rain)
+    const mistActive = this.weatherMistStrength > 0.02;
+    const isNight = this.timeOfDay === 'malam';
+    const mistBaseOpacity = this.weatherMistStrength * (isNight ? 0.09 : 0.24);
+    for (let i = 0; i < this.mistPlanes.length; i++) {
+      const mp = this.mistPlanes[i];
+      mp.mesh.visible = mistActive;
+      if (!mistActive) continue;
+      mp.mat.opacity = mistBaseOpacity * (0.75 + 0.25 * Math.sin(this.worldElapsed * 0.6 + mp.phase));
+      mp.mesh.position.set(
+        mp.baseOffsetX + Math.sin(this.worldElapsed * mp.speed + mp.phase) * 6.5,
+        Math.max(WATER_SURFACE_Y + 2.2, baseY + mp.baseY),
+        mp.baseOffsetZ + Math.cos(this.worldElapsed * mp.speed * 0.8 + mp.phase) * 5.2,
+      );
+      mp.mesh.lookAt(anchorX, mp.mesh.position.y, anchorZ);
+    }
+  }
+
   private applyTimeOfDayImmediate(phase: TimeOfDayPhase): void {
-    const p = TIME_PRESETS[phase];
+    const p = computeEffectiveAtmosphere(phase, this.weather);
     this.builtCity.skyUniforms.topColor.value.setHex(p.skyTop);
     this.builtCity.skyUniforms.horizonColor.value.setHex(p.skyHorizon);
     this.builtCity.skyUniforms.sunColor.value.setHex(p.sunGlow);
@@ -811,6 +1087,11 @@ export class UrbanWorldEngine {
     this.fillLight.intensity = Math.max(0.18, p.hemiIntensity * 0.44);
     this.scene.environmentIntensity = p.envIntensity;
 
+    this.builtCity.roadMat.roughness = p.roadRoughness;
+    this.builtCity.roadMat.metalness = p.roadMetalness;
+    this.weatherRainStrength = p.rainOpacity;
+    this.weatherMistStrength = p.mistOpacity;
+
     this.builtCity.lampBulbMat.emissiveIntensity = p.lampEmissiveIntensity;
     this.builtCity.windowGlowMat.emissiveIntensity = p.windowEmissiveIntensity;
     for (const m of this.builtCity.buildingWindowMats) {
@@ -820,8 +1101,8 @@ export class UrbanWorldEngine {
   }
 
   private updateTimeOfDayLighting(dt: number): void {
-    const p = TIME_PRESETS[this.timeOfDay];
-    const lambda = 5.5;
+    const p = computeEffectiveAtmosphere(this.timeOfDay, this.weather);
+    const lambda = 4.2;
     const alpha = 1 - Math.exp(-lambda * dt);
 
     const camWater = getWaterInfoAt(
@@ -908,6 +1189,23 @@ export class UrbanWorldEngine {
       );
     }
 
+    this.builtCity.roadMat.roughness = dampValue(
+      this.builtCity.roadMat.roughness,
+      p.roadRoughness,
+      lambda,
+      dt,
+    );
+    this.builtCity.roadMat.metalness = dampValue(
+      this.builtCity.roadMat.metalness,
+      p.roadMetalness,
+      lambda,
+      dt,
+    );
+    const rainLambda = p.rainOpacity < this.weatherRainStrength ? 8.5 : lambda;
+    this.weatherRainStrength = dampValue(this.weatherRainStrength, p.rainOpacity, rainLambda, dt);
+    this.weatherMistStrength = dampValue(this.weatherMistStrength, p.mistOpacity, lambda, dt);
+    this.updateWeatherEffects(dt, cameraSubmerged);
+
     this.sunOffset.x = dampValue(this.sunOffset.x, p.sunPosition[0], lambda, dt);
     this.sunOffset.y = dampValue(this.sunOffset.y, p.sunPosition[1], lambda, dt);
     this.sunOffset.z = dampValue(this.sunOffset.z, p.sunPosition[2], lambda, dt);
@@ -954,6 +1252,21 @@ export class UrbanWorldEngine {
     this.audio.playUiClick();
     this.pushHudSnapshot(true);
     return this.timeOfDay;
+  }
+
+  public setWeather(next: WeatherPhase): void {
+    this.weather = next;
+    this.weatherCycleTimer = 0;
+    this.settings.weather = next;
+    this.audio.playUiClick();
+    this.showActivityToast(`Cuaca: ${WEATHER_PRESETS[next].label}`, 2.6);
+    this.pushHudSnapshot(true);
+  }
+
+  public cycleWeather(): WeatherPhase {
+    const next = nextWeather(this.weather);
+    this.setWeather(next);
+    return next;
   }
 
   private setPhase(nextPhase: GamePhase, immediate = false): void {
@@ -2141,6 +2454,7 @@ export class UrbanWorldEngine {
         muted: this.audio.isMuted(),
         musicEnabled: this.audio.isMusicEnabled(),
         timeOfDay: this.timeOfDay,
+        weather: this.weather,
       },
       playerPos: this.outdoorReturnState
         ? {
@@ -2196,6 +2510,8 @@ export class UrbanWorldEngine {
     this.lastSavedAt = saved.savedAt;
 
     this.timeOfDay = this.settings.timeOfDay;
+    this.weather = this.settings.weather || 'sunny';
+    this.weatherCycleTimer = 0;
     this.applyTimeOfDayImmediate(this.timeOfDay);
     this.applyGraphicsQualitySettings(this.settings.graphicsQuality);
     this.audio.setMuted(this.settings.muted);
@@ -2819,6 +3135,9 @@ export class UrbanWorldEngine {
 
     // Hide exterior city & world entities
     this.builtCity.group.visible = false;
+    if (this.weatherEffectsGroup) {
+      this.weatherEffectsGroup.visible = false;
+    }
     this.skyLifeRig.group.visible = false;
     this.outdoorKioskRigs.forEach((kr) => {
       kr.group.visible = false;
@@ -2836,6 +3155,7 @@ export class UrbanWorldEngine {
 
     this.scene.add(built.group);
     this.rebuildInteriorQuizKiosks();
+    this.spawnInteriorNpcs();
 
     // Interior atmosphere & lighting
     (this.scene.background as THREE.Color).setHex(0x131822);
@@ -2888,6 +3208,7 @@ export class UrbanWorldEngine {
     const entrance = this.activeEntrance;
     const savedReturn = this.outdoorReturnState;
 
+    this.disposeInteriorNpcs();
     this.disposeKioskRigs(this.interiorKioskRigs);
     this.interiorKiosks = [];
     if (this.activeBuiltInterior) {
@@ -2965,6 +3286,33 @@ export class UrbanWorldEngine {
     this.camInitialized = false;
     this.snapCameraBehindPlayer();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  private disposeInteriorNpcs(): void {
+    for (let i = 0; i < this.interiorNpcRigs.length; i++) {
+      const rig = this.interiorNpcRigs[i];
+      this.scene.remove(rig.root);
+      rig.dispose();
+    }
+    this.interiorNpcRigs = [];
+    this.interiorNpcs = [];
+  }
+
+  private spawnInteriorNpcs(): void {
+    this.disposeInteriorNpcs();
+    if (!this.activeBlueprint) return;
+    this.interiorNpcs = createInteriorNpcs(
+      this.activeBlueprint,
+      this.activeInteriorDoors,
+      this.interiorKiosks,
+    );
+    for (let i = 0; i < this.interiorNpcs.length; i++) {
+      const npc = this.interiorNpcs[i];
+      const rig = createNpcRig(npc.variant, this.textures.contactShadowMap, !this.isSoftwareGl);
+      animateNpcRig(rig, npc, this.worldElapsed);
+      this.scene.add(rig.root);
+      this.interiorNpcRigs.push(rig);
+    }
   }
 
   public triggerMissionAction(): void {
@@ -3721,7 +4069,8 @@ export class UrbanWorldEngine {
     this.callbacks.onSnapshot({
       phase: this.phase,
       timeOfDay: this.timeOfDay,
-      timeLabel: TIME_PRESETS[this.timeOfDay].label,
+      weather: this.weather,
+      timeLabel: formatTimeWeatherLabel(this.timeOfDay, this.weather),
       cityId: activeCity.id,
       cityName: activeCity.name,
       district: district.id,
@@ -3869,6 +4218,11 @@ export class UrbanWorldEngine {
 
       if (e.code === 'KeyT' && this.phase === 'playing') {
         this.cycleTimeOfDay();
+        return;
+      }
+
+      if (e.code === 'KeyY' && this.phase === 'playing') {
+        this.cycleWeather();
         return;
       }
 
@@ -4178,6 +4532,17 @@ export class UrbanWorldEngine {
       const dt = Math.min(rawDt, 0.05);
       const isNightOrDusk = this.timeOfDay === 'malam' || this.timeOfDay === 'sore';
 
+      if (this.phase === 'playing' && !this.activeBlueprint && this.previewMode === 'none') {
+        const cyc = stepWeatherCycle(this.weather, this.weatherCycleTimer, dt);
+        this.weatherCycleTimer = cyc.timerSeconds;
+        if (cyc.changed) {
+          this.weather = cyc.weather;
+          this.settings.weather = cyc.weather;
+          this.showActivityToast(`Cuaca: ${WEATHER_PRESETS[cyc.weather].label}`, 3.0);
+          this.pushHudSnapshot(true);
+        }
+      }
+
       if (!this.activeBlueprint) {
         this.updateTimeOfDayLighting(dt);
       }
@@ -4439,6 +4804,33 @@ export class UrbanWorldEngine {
           this.input.jumpJustPressed = false;
           this.currentInteriorFloor = res.floorInfo.currentFloor;
           this.prevOnStairs = res.floorInfo.onStairs;
+
+          stepInteriorNpcs(
+            this.interiorNpcs,
+            dt,
+            this.playerState.x,
+            this.playerState.y,
+            this.playerState.z,
+            this.activeBlueprint,
+            this.activeInteriorDoors,
+            this.interiorKiosks,
+          );
+          if (!this.activeSitSpot && !ridingInElevator) {
+            resolvePlayerVsNpcs(this.playerState, this.interiorNpcs, NPC_RADIUS, {
+              playerYieldWeight: 0.15,
+            });
+          }
+          const cullIntNpcByFloor = this.activeBlueprint.floorsCount > 3;
+          for (let i = 0; i < this.interiorNpcs.length; i++) {
+            const npc = this.interiorNpcs[i];
+            const rig = this.interiorNpcRigs[i];
+            const fl = npc.floorNumber ?? 1;
+            const visible = !cullIntNpcByFloor || Math.abs(fl - this.currentInteriorFloor) <= 1;
+            rig.root.visible = visible;
+            if (visible) {
+              animateNpcRig(rig, npc, this.worldElapsed);
+            }
+          }
           this.progression.totalDistance += Math.hypot(
             this.playerState.x - prevX,
             this.playerState.z - prevZ,
@@ -4608,7 +5000,9 @@ export class UrbanWorldEngine {
             );
 
             stepNpcs(this.npcs, dt, this.playerState.x, this.playerState.z, CITY_LAYOUT);
-            resolvePlayerVsNpcs(this.playerState, this.npcs);
+            resolvePlayerVsNpcs(this.playerState, this.npcs, NPC_RADIUS, {
+              playerYieldWeight: 0.2,
+            });
             this.resolvePedestrianVsVehicles();
 
             if (events.jumped) this.audio.playJump();
@@ -5121,11 +5515,10 @@ export class UrbanWorldEngine {
       }
 
       if (showOutdoorBeacons) {
-        const waterPulse = Math.sin(now * 0.0025) * 0.025;
+        const waterPulse = Math.sin(now * 0.0025) * 0.014;
         for (let i = 0; i < this.builtCity.animatedWaterMeshes.length; i++) {
           this.builtCity.animatedWaterMeshes[i].position.y = 0.75 + waterPulse;
         }
-        this.builtCity.bayWater.position.y = -0.38 + waterPulse * 1.4;
       }
 
       // Animate 3D Educational Quiz Kiosks & Hidden Collectibles (respecting floor visibility culling)
@@ -5177,6 +5570,7 @@ export class UrbanWorldEngine {
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock?.();
     }
+    this.disposeInteriorNpcs();
     this.audio.dispose();
     this.disposeCallbacks.forEach((fn) => fn());
     this.renderer.dispose();
